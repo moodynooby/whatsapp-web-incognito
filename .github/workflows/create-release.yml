@@ -42,7 +42,7 @@ jobs:
         with:
           tag_name: v${{ steps.set-version.outputs.version }}
           name: WAIncognito v${{ steps.set-version.outputs.version }}
-          draft: true
+          draft: false
           files: WAIncognito-${{ steps.set-version.outputs.version }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
