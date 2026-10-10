@@ -1,0 +1,20 @@
+Package: waincognito
+Version: 2.5.99
+Architecture: amd64
+Maintainer: manas <immanasdoshi@gmail.com>
+Installed-Size: 291230
+Depends: libgtk-3-0, libnotify4, libnss3, libxss1, libxtst6, xdg-utils, libatspi2.0-0, libuuid1, libsecret-1-0
+Recommends: libappindicator3-1
+Filename: pool/main/waincognito_2.5.99_amd64.deb
+Size: 99613060
+MD5sum: ac94d305ebb7ca595c666e92a0e7a45c
+SHA1: 284c09abb99e47aa083de69ab601c4568099e6a2
+SHA256: 51c69feb2e5e625c7f4e9333fd0bc5faafad0b2d88220c6940a2ea0a990e1412
+Section: default
+Priority: optional
+Homepage: https://github.com/moodynooby/whatsapp-web-incognito
+Description:
+  Be invisible on WhatsApp Web by disabling read receipts and presence updates
+License: GPL-3.0
+Vendor: manas <immanasdoshi@gmail.com>
+

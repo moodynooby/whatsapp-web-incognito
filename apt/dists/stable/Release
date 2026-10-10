@@ -1,0 +1,23 @@
+Origin: WAIncognito
+Label: WAIncognito
+Suite: stable
+Codename: stable
+Architectures: amd64 arm64
+Components: main
+Description: Official APT repository for WAIncognito (WhatsApp Incognito Desktop)
+Date: Sat, 10 Oct 2026 09:57:21 GMT
+MD5Sum:
+ ee320ed9b8f9d466d697bd98ecc43f9c 738 main/binary-amd64/Packages
+ 04a8fd582d181f5d2b2794e092a9e20d 503 main/binary-amd64/Packages.gz
+ d41d8cd98f00b204e9800998ecf8427e 0 main/binary-arm64/Packages
+ 7029066c27ac6f5ef18d660d5741979a 20 main/binary-arm64/Packages.gz
+SHA1:
+ fa05e49e1b235ca896c61ca652e43728d664645e 738 main/binary-amd64/Packages
+ b0f7f31a20bd7ee05b6e71c085f4496d81e4f8e1 503 main/binary-amd64/Packages.gz
+ da39a3ee5e6b4b0d3255bfef95601890afd80709 0 main/binary-arm64/Packages
+ 46c6643f07aa7f6bfe7118de926b86defc5087c4 20 main/binary-arm64/Packages.gz
+SHA256:
+ 0260782ddfd619f10ab0952a78b4f0ea243f9019dc67e017bb5db65131a98ff7 738 main/binary-amd64/Packages
+ 9b682d4d463365b499d12caa26415f41b523e54dbf142d002baa8782f53d50bc 503 main/binary-amd64/Packages.gz
+ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 0 main/binary-arm64/Packages
+ 59869db34853933b239f1e2219cf7d431da006aa919635478511fabbfc8849d2 20 main/binary-arm64/Packages.gz
