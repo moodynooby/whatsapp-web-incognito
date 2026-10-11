@@ -1,15 +1,15 @@
 Package: waincognito
-Version: 2.5.99
+Version: 2.6.0
 Architecture: amd64
 Maintainer: manas <immanasdoshi@gmail.com>
 Installed-Size: 291230
 Depends: libgtk-3-0, libnotify4, libnss3, libxss1, libxtst6, xdg-utils, libatspi2.0-0, libuuid1, libsecret-1-0
 Recommends: libappindicator3-1
-Filename: pool/main/waincognito_2.5.99_amd64.deb
-Size: 99613060
-MD5sum: ac94d305ebb7ca595c666e92a0e7a45c
-SHA1: 284c09abb99e47aa083de69ab601c4568099e6a2
-SHA256: 51c69feb2e5e625c7f4e9333fd0bc5faafad0b2d88220c6940a2ea0a990e1412
+Filename: pool/main/waincognito_2.6.0_amd64.deb
+Size: 99613092
+MD5sum: c0d48a4678d17691c3518a893a217e01
+SHA1: 328fe6a96073109b4481cfadb52edb9d73882f53
+SHA256: 83d7c1a9d184796eb800bece6efb050983c04ab06bbeca16a168c6dbe3f132c4
 Section: default
 Priority: optional
 Homepage: https://github.com/moodynooby/whatsapp-web-incognito
