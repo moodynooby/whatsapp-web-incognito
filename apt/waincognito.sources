@@ -1,0 +1,6 @@
+Types: deb
+URIs: https://moodynooby.github.io/whatsapp-web-incognito/apt/
+Suites: stable
+Components: main
+Architectures: amd64 arm64
+Signed-By: /etc/apt/keyrings/waincognito.gpg

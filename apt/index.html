@@ -11,29 +11,33 @@
     pre { background: #1e293b; padding: 1rem; border-radius: 8px; overflow-x: auto; border: 1px solid #334155; }
     pre code { background: none; padding: 0; color: #a5f3fc; }
     .card { background: #1e293b80; border: 1px solid #334155; border-radius: 8px; padding: 1.5rem; margin-top: 1.5rem; }
+    .badge { display: inline-block; padding: 0.25rem 0.6rem; border-radius: 9999px; font-size: 0.8rem; font-weight: 600; background: #065f46; color: #6ee7b7;; }
   </style>
 </head>
 <body>
-  <h1>WAIncognito APT Repository</h1>
-  <p>Official Debian/Ubuntu APT repository for <strong>WAIncognito</strong>.</p>
+  <h1>WAIncognito APT Repository <span class="badge">GPG Signed</span></h1>
+  <p>Official Debian/Ubuntu APT repository for <strong>WAIncognito</strong> (WhatsApp Incognito Desktop).</p>
 
   <div class="card">
-    <h3>Quick Setup</h3>
+    <h3>Quick Setup (Recommended)</h3>
+    <p>Runs the automated deb822 installer:</p>
     <pre><code>curl -fsSL https://moodynooby.github.io/whatsapp-web-incognito/apt/setup.sh | sudo bash
 sudo apt install waincognito</code></pre>
   </div>
 
   <div class="card">
-    <h3>Manual Setup</h3>
-    <p>Add the repository to your APT sources:</p>
-    <pre><code>echo "deb [trusted=yes] https://moodynooby.github.io/whatsapp-web-incognito/apt/ stable main" | sudo tee /etc/apt/sources.list.d/waincognito.list
+    <h3>Manual Setup (Modern deb822)</h3>
+    <p>1. Download the repository source configuration:</p>
+    <pre><code>sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://moodynooby.github.io/whatsapp-web-incognito/apt/waincognito.gpg | sudo tee /etc/apt/keyrings/waincognito.gpg > /dev/null
+curl -fsSL https://moodynooby.github.io/whatsapp-web-incognito/apt/waincognito.sources | sudo tee /etc/apt/sources.list.d/waincognito.sources > /dev/null
 sudo apt update
 sudo apt install waincognito</code></pre>
   </div>
 
   <div class="card">
-    <h3>Updating</h3>
-    <p>Once installed, updates are delivered automatically via standard package management:</p>
+    <h3>Automatic Updates</h3>
+    <p>Once installed, updates are automatically delivered through standard package updates with conditional caching:</p>
     <pre><code>sudo apt update && sudo apt upgrade</code></pre>
   </div>
 </body>

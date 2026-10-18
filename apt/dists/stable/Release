@@ -5,19 +5,33 @@ Codename: stable
 Architectures: amd64 arm64
 Components: main
 Description: Official APT repository for WAIncognito (WhatsApp Incognito Desktop)
-Date: Sun, 18 Oct 2026 13:38:26 GMT
+Date: Sun, 18 Oct 2026 15:13:39 GMT
+Acquire-By-Hash: yes
 MD5Sum:
- b2a00e932010c4080922eea2c1c2767c 736 main/binary-amd64/Packages
- d180370d85033b8383c17b9ea3e00aa1 505 main/binary-amd64/Packages.gz
+ f85710fb439810ab30ea7cf2462171c4 736 main/binary-amd64/Packages
+ e9f14659349996d9d4fdf7153b9997b0 503 main/binary-amd64/Packages.gz
  d41d8cd98f00b204e9800998ecf8427e 0 main/binary-arm64/Packages
  7029066c27ac6f5ef18d660d5741979a 20 main/binary-arm64/Packages.gz
+ fcce06e14353ad21b55ffc4c413111fc 584 main/binary-amd64/Packages.xz
+ 8dc5aea5b03dff8595f096f9e368e888 32 main/binary-arm64/Packages.xz
 SHA1:
- d7fb27d5a48299ae9be102fc8745eb0935af32db 736 main/binary-amd64/Packages
- 76a795e85f42e73e7f64246812849e266b933977 505 main/binary-amd64/Packages.gz
+ 26d853cf8eecb76638c2014a8182d2e75bb045f7 736 main/binary-amd64/Packages
+ 2ac696c016c9ffef517d25106d8229c7125127b1 503 main/binary-amd64/Packages.gz
  da39a3ee5e6b4b0d3255bfef95601890afd80709 0 main/binary-arm64/Packages
  46c6643f07aa7f6bfe7118de926b86defc5087c4 20 main/binary-arm64/Packages.gz
+ c3f374090f2b482f89d91fc244ccf2b9c28620f3 584 main/binary-amd64/Packages.xz
+ 9746882f4236fa1c3a8f86be2f1d9c46680c0b10 32 main/binary-arm64/Packages.xz
 SHA256:
- 38666accb8832ee23c428baffd75024e2142d23af598228e9aee7a0c21b2e401 736 main/binary-amd64/Packages
- c586a4198d0bb1691d86506e56ef9d1ad4f4b3fdcdd4fd3e9afe97409b89d2f0 505 main/binary-amd64/Packages.gz
+ 59c719fa93bdbfcabdd2017a4b2bf9a32bfc06addeb7a7a004860baf351e211f 736 main/binary-amd64/Packages
+ be31114f201d531f61dbf74e51e1f616f90eb03ed07f42e3a5a75080448acb51 503 main/binary-amd64/Packages.gz
  e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 0 main/binary-arm64/Packages
  59869db34853933b239f1e2219cf7d431da006aa919635478511fabbfc8849d2 20 main/binary-arm64/Packages.gz
+ 03f6d4c4754bf35ce41d1ec00a41fc9b69509486c2fd9a3868407a6b0f422e26 584 main/binary-amd64/Packages.xz
+ 0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275 32 main/binary-arm64/Packages.xz
+SHA512:
+ 8aa02652cd51f63ef99074afe4de722035033a38987b15dd734b4d37d7e9a2807aae2aa236ca1da6a57707062f74211e5d8c8d1dbd3aee26adfddacf4def6f77 736 main/binary-amd64/Packages
+ 7b4fc1c59c5a7eb1e4b276d05b1da7cd411b936226beafc8acb49d63774e5b80e6dc23991e6dbe6500db91f373ff2abd5f87905cf93cb15e23e74c828ef96732 503 main/binary-amd64/Packages.gz
+ cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e 0 main/binary-arm64/Packages
+ 7e8e93f4a89ce7fae011403e14a1d53544c6e6f6b6010d61129dc27937806d2b03802610d7999eab33a4c36b0f9e001d9d76001b8354087634c1aa9c740c536f 20 main/binary-arm64/Packages.gz
+ 8cde152ed1ff490ee14d825150eaf422f840653f948a2bc7375b08a8e8c44452fd78bace6ee382dbb03917740401a15e56ed6342458aaf62f3115fbc19d8d737 584 main/binary-amd64/Packages.xz
+ 034b32f1138322638c7a5b7949a3b184c6a4cdfd003360a496c08c56c2cc645c94fbe9cdf9d84c963af6dda6c442717cd61d7e1cecf7024bd463f6f5196c5527 32 main/binary-arm64/Packages.xz
