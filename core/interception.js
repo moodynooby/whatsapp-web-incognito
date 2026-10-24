@@ -676,19 +676,22 @@ function hookLogs()
     {        
         return function(strings, values)
         {
-            var message = "[WhatsApp][" + errorLevel + "] -- " + makeLogMessage(arguments);
+            if (WAdebugMode || errorLevel > 2)
+            {
+                var message = "[WhatsApp][" + errorLevel + "] -- " + makeLogMessage(arguments);
 
-            if (errorLevel <= 2 && WAdebugMode)
-            {
-                console.log(message);
-            }
-            else if (errorLevel > 2 && WAdebugMode)
-            {
-                console.error(message);
-            }
-            else if (errorLevel > 2)
-            {
-                console.info(message);
+                if (errorLevel <= 2 && WAdebugMode)
+                {
+                    console.log(message);
+                }
+                else if (errorLevel > 2 && WAdebugMode)
+                {
+                    console.error(message);
+                }
+                else if (errorLevel > 2)
+                {
+                    console.info(message);
+                }
             }
 
             if (originalLog)
