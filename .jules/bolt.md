@@ -1,0 +1,3 @@
+## 2026-10-25 - MutationObserver Performance Pitfalls
+**Learning:** In highly dynamic web apps (like WhatsApp Web), traversing deeply nested DOM trees or repeatedly querying `getElementsByClassName` on removed/added nodes inside a `MutationObserver` creates substantial performance bottlenecks. `querySelectorAll` being run indiscriminately on leaf nodes (e.g. text nodes, SVG fragments) is equally inefficient.
+**Action:** Always replace O(N) detached DOM node iterations with O(1) global DOM state checks (e.g., checking `document.getElementsByClassName("root").length` once) when detecting app unmounts. For added node processing, apply a `node.firstElementChild` guard before running `node.querySelectorAll` to cleanly skip leaf nodes.

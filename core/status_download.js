@@ -118,7 +118,7 @@ function checkNodeAndChildrenForSRC(node, functionToCall)
     {
         functionToCall(node.src, node);
     }
-    if (node.querySelectorAll)
+    if (node.firstElementChild && node.querySelectorAll)
     {
         var mediaList = node.querySelectorAll("img, video");
         for (var j = 0; j < mediaList.length; j++) 
