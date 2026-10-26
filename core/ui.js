@@ -103,7 +103,7 @@ function onMutationsObserved(mutations)
             if (isMessageNode(addedNode)) {
                 onNewMessageNodeAdded(addedNode);
             }
-            if (addedNode.querySelectorAll) {
+            if (addedNode.firstElementChild && addedNode.querySelectorAll) {
                 var subMsgNodes = addedNode.querySelectorAll('[data-testid^="conv-msg"]');
                 for (var k = 0; k < subMsgNodes.length; k++) {
                     onNewMessageNodeAdded(subMsgNodes[k]);
@@ -113,24 +113,18 @@ function onMutationsObserved(mutations)
 
         
         // Remove the menu item when the app is removed
-        for (var j = 0; j < removedNodes.length; j++)
+        if (isMainUIInitialized && document.getElementsByClassName("two").length === 0)
         {
-            var removedNode = removedNodes[j];
-            if (removedNode.nodeType !== 1) continue;
-            if (removedNode.classList && (removedNode.classList.contains("two") || removedNode.getElementsByClassName("two").length > 0))
-            {
-                isMainUIInitialized = false;
-                // main app was removed, remove our artifacts
-                var menuItem = document.getElementsByClassName("menu-item-incognito")[0];
-                var dropItem = document.getElementsByClassName("drop")[0];
-                if (menuItem != undefined) menuItem.remove();
-                if (dropItem != undefined) dropItem.remove();
+            isMainUIInitialized = false;
+            // main app was removed, remove our artifacts
+            var menuItem = document.getElementsByClassName("menu-item-incognito")[0];
+            var dropItem = document.getElementsByClassName("drop")[0];
+            if (menuItem != undefined) menuItem.remove();
+            if (dropItem != undefined) dropItem.remove();
 
-                found = true;
-                break;
-            }
-
+            found = true;
         }
+
         if (found) break;
     }
 
