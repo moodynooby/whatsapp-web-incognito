@@ -79,7 +79,8 @@ function onMutationsObserved(mutations)
             var addedNode = addedNodes[j];
             if (addedNode.nodeType !== 1) continue;
 
-            if (!isMainUIInitialized && (addedNode.classList.contains("two") || addedNode.getElementsByClassName("two").length > 0))
+            // Bolt: Added `addedNode.firstElementChild` check to short-circuit non-element nodes and avoid unnecessary DOM queries.
+            if (!isMainUIInitialized && (addedNode.classList.contains("two") || (addedNode.firstElementChild && addedNode.getElementsByClassName("two").length > 0)))
             {
                 // main app was added, UI is ready
                 isMainUIInitialized = true;
@@ -112,22 +113,20 @@ function onMutationsObserved(mutations)
         }
 
         
-        // Remove the menu item when the app is removed
-        if (isMainUIInitialized && document.getElementsByClassName("two").length === 0)
-        {
-            isMainUIInitialized = false;
-            // main app was removed, remove our artifacts
-            var menuItem = document.getElementsByClassName("menu-item-incognito")[0];
-            var dropItem = document.getElementsByClassName("drop")[0];
-            if (menuItem != undefined) menuItem.remove();
-            if (dropItem != undefined) dropItem.remove();
-
-            found = true;
-        }
-
         if (found) break;
     }
 
+    // Bolt: Moved this global DOM check outside the mutations loop to run it O(1) time per observer invocation instead of O(N) time.
+    // Remove the menu item when the app is removed
+    if (isMainUIInitialized && document.getElementsByClassName("two").length === 0)
+    {
+        isMainUIInitialized = false;
+        // main app was removed, remove our artifacts
+        var menuItem = document.getElementsByClassName("menu-item-incognito")[0];
+        var dropItem = document.getElementsByClassName("drop")[0];
+        if (menuItem != undefined) menuItem.remove();
+        if (dropItem != undefined) dropItem.remove();
+    }
 }
 
 function onMainUIReady()
