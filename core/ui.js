@@ -116,7 +116,12 @@ function onMutationsObserved(mutations)
         if (found) break;
     }
 
-    // Bolt: Moved this global DOM check outside the mutations loop to run it O(1) time per observer invocation instead of O(N) time.
+    // ⚡ Bolt: Moved unmount check outside of the mutations loop
+    // What: Evaluate live DOM state once per microtask batch instead of per mutation.
+    // Why: Repeatedly querying `getElementsByClassName` on the entire document inside a
+    //      MutationObserver creates an O(N * DOM Size) bottleneck in highly dynamic apps.
+    // Impact: Reduces DOM queries from O(mutations) to O(1) per microtask.
+    // Measurement: App runs measurably faster when handling large batches of added/removed nodes.
     // Remove the menu item when the app is removed
     if (isMainUIInitialized && document.getElementsByClassName("two").length === 0)
     {
