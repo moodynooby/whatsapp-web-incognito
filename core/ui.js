@@ -79,7 +79,8 @@ function onMutationsObserved(mutations)
             var addedNode = addedNodes[j];
             if (addedNode.nodeType !== 1) continue;
 
-            if (!isMainUIInitialized && (addedNode.classList.contains("two") || addedNode.getElementsByClassName("two").length > 0))
+            // Bolt: Added `addedNode.firstElementChild` check to short-circuit non-element nodes and avoid unnecessary DOM queries.
+            if (!isMainUIInitialized && (addedNode.classList.contains("two") || (addedNode.firstElementChild && addedNode.getElementsByClassName("two").length > 0)))
             {
                 // main app was added, UI is ready
                 isMainUIInitialized = true;
@@ -131,7 +132,6 @@ function onMutationsObserved(mutations)
         if (menuItem != undefined) menuItem.remove();
         if (dropItem != undefined) dropItem.remove();
     }
-
 }
 
 function onMainUIReady()
