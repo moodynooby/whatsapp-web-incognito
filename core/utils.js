@@ -135,14 +135,23 @@ function getCurrentChatPanel()
     return elements[0];
 }
 
+function getPrefixFromJID(jid)
+{
+    if (!jid) return "";
+    var atIndex = jid.indexOf("@");
+    var prefix = atIndex !== -1 ? jid.substring(0, atIndex) : jid;
+    var colonIndex = prefix.indexOf(":");
+    return colonIndex !== -1 ? prefix.substring(0, colonIndex) : prefix;
+}
+
 function isChatBlocked(jid)
 {
-    var user = jid.split("@")[0].split(":")[0];
+    var user = getPrefixFromJID(jid);
 
-    for (jid in blockedChats)
+    for (var blockedJid in blockedChats)
     {
-        var possibleLid = blockedChats[jid].accountLid ? blockedChats[jid].accountLid.toString() : "";
-        if (jid.split("@")[0].split(":")[0] == user || possibleLid.split("@")[0].split(":")[0] == user)
+        var possibleLid = blockedChats[blockedJid].accountLid ? blockedChats[blockedJid].accountLid.toString() : "";
+        if (getPrefixFromJID(blockedJid) == user || (possibleLid && getPrefixFromJID(possibleLid) == user))
             return true;
     }
 
@@ -192,9 +201,16 @@ function getJidOfChat(chat)
 
 function normalizeJID(jid)
 {
-    if (jid.includes("@s.whatsapp.net")) jid = jid.replace("@s.whatsapp.net", "@c.us");
-    var suffix = jid.split("@")[1];
-    var prefix = jid.split("@")[0].split(":")[0];
+    var atIndex = jid.indexOf("@");
+    var prefix = atIndex !== -1 ? jid.substring(0, atIndex) : jid;
+    var suffix = atIndex !== -1 ? jid.substring(atIndex + 1) : undefined;
+
+    if (suffix === "s.whatsapp.net") suffix = "c.us";
+
+    var colonIndex = prefix.indexOf(":");
+    if (colonIndex !== -1) {
+        prefix = prefix.substring(0, colonIndex);
+    }
 
     return prefix + "@" + suffix;
 }
