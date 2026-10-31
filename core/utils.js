@@ -336,12 +336,17 @@ function clearDatabase(idbDatabase)
 }
 
 // Based on https://stackoverflow.com/a/39165137/1806873
+let cachedReactKey = null;
+
 function FindReact(dom, traverseUp = 0) 
 {
-    const key = Object.keys(dom).find(key=>{
-        return key.startsWith("__reactFiber$") // react 17+
-            || key.startsWith("__reactInternalInstance$"); // react <17
-    });
+    let key = cachedReactKey;
+    if (!key || !dom[key]) {
+        key = Object.keys(dom).find(k => k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$"));
+        if (key) {
+            cachedReactKey = key;
+        }
+    }
     const domFiber = dom[key];
     if (domFiber == null) return null;
 

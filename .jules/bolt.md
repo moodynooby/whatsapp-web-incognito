@@ -9,3 +9,6 @@
 ## 2026-10-29 - Array Allocations in Hot Paths
 **Learning:** Frequent string parsing logic using `.split()` creates unnecessary short-lived arrays, triggering garbage collection pressure in message-heavy applications like WhatsApp.
 **Action:** Replace `.split()` usage with `indexOf()` and `substring()` for parsing JIDs and checking if chats are blocked, maintaining logic while significantly reducing memory allocations.
+## 2026-10-31 - Caching dynamically generated React keys
+**Learning:** Calling `Object.keys(dom)` inside frequently invoked DOM traversal functions (like `FindReact`) is highly inefficient because DOM elements possess hundreds of properties, creating unnecessary array allocations and iterations.
+**Action:** Always cache the dynamically generated React internal property key (`__reactFiber$` or `__reactInternalInstance$`) upon first discovery. Utilize this cached key for subsequent fast O(1) property lookups, while maintaining a safe fallback.
