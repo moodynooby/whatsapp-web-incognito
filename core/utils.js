@@ -335,13 +335,20 @@ function clearDatabase(idbDatabase)
     })
 }
 
+let cachedReactKey = null;
+
 // Based on https://stackoverflow.com/a/39165137/1806873
 function FindReact(dom, traverseUp = 0) 
 {
-    const key = Object.keys(dom).find(key=>{
+    // Performance optimization: Cache the dynamically generated React key to avoid
+    // expensive Object.keys() iteration on every traversal.
+    const key = cachedReactKey || Object.keys(dom).find(key=>{
         return key.startsWith("__reactFiber$") // react 17+
             || key.startsWith("__reactInternalInstance$"); // react <17
     });
+    if (!cachedReactKey && key) {
+        cachedReactKey = key;
+    }
     const domFiber = dom[key];
     if (domFiber == null) return null;
 
