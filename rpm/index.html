@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WAIncognito RPM Repository (DNF/YUM)</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 2rem; max-width: 800px; margin: 0 auto; line-height: 1.6; }
+    h1 { color: #38bdf8; }
+    code { background: #1e293b; color: #38bdf8; padding: 0.2rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
+    pre { background: #1e293b; padding: 1rem; border-radius: 8px; overflow-x: auto; border: 1px solid #334155; }
+    pre code { background: none; padding: 0; color: #a5f3fc; }
+    .card { background: #1e293b80; border: 1px solid #334155; border-radius: 8px; padding: 1.5rem; margin-top: 1.5rem; }
+    .badge { display: inline-block; padding: 0.25rem 0.6rem; border-radius: 9999px; font-size: 0.8rem; font-weight: 600; background: #065f46; color: #6ee7b7;; }
+  </style>
+</head>
+<body>
+  <h1>WAIncognito RPM Repository <span class="badge">GPG Signed</span></h1>
+  <p>Official Fedora / RHEL / CentOS / openSUSE RPM repository for <strong>WAIncognito</strong> (WhatsApp Incognito Desktop).</p>
+
+  <div class="card">
+    <h3>Quick Setup (Recommended)</h3>
+    <p>Runs the automated DNF repository installer:</p>
+    <pre><code>curl -fsSL https://moodynooby.github.io/whatsapp-web-incognito/rpm/setup.sh | sudo bash
+sudo dnf install waincognito</code></pre>
+  </div>
+
+  <div class="card">
+    <h3>Manual Setup</h3>
+    <p>1. Download repository configuration:</p>
+    <pre><code>sudo curl -fsSL https://moodynooby.github.io/whatsapp-web-incognito/rpm/RPM-GPG-KEY-waincognito -o /etc/pki/rpm-gpg/RPM-GPG-KEY-waincognito
+sudo curl -fsSL https://moodynooby.github.io/whatsapp-web-incognito/rpm/waincognito.repo -o /etc/yum.repos.d/waincognito.repo
+sudo dnf install waincognito</code></pre>
+  </div>
+
+  <div class="card">
+    <h3>Automatic Updates</h3>
+    <p>Updates are delivered through standard dnf upgrade commands:</p>
+    <pre><code>sudo dnf upgrade --refresh waincognito</code></pre>
+  </div>
+</body>
+</html>

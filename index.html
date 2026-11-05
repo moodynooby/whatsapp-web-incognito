@@ -1,1 +1,43 @@
-<meta http-equiv="refresh" content="0; url=apt/">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WAIncognito Linux Repositories</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 2rem; max-width: 800px; margin: 0 auto; line-height: 1.6; }
+    h1 { color: #38bdf8; }
+    code { background: #1e293b; color: #38bdf8; padding: 0.2rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
+    pre { background: #1e293b; padding: 1rem; border-radius: 8px; overflow-x: auto; border: 1px solid #334155; }
+    pre code { background: none; padding: 0; color: #a5f3fc; }
+    .card { background: #1e293b80; border: 1px solid #334155; border-radius: 8px; padding: 1.5rem; margin-top: 1.5rem; }
+    .btn { display: inline-block; padding: 0.6rem 1.2rem; background: #0284c7; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 500; margin-top: 0.5rem; }
+    .btn:hover { background: #0369a1; }
+  </style>
+</head>
+<body>
+  <h1>WAIncognito Linux Repositories</h1>
+  <p>Official Linux package repositories for <strong>WAIncognito</strong> (WhatsApp Incognito Desktop).</p>
+
+  <div class="card">
+    <h3>Ubuntu & Debian (APT)</h3>
+    <pre><code>curl -fsSL https://moodynooby.github.io/whatsapp-web-incognito/apt/setup.sh | sudo bash
+sudo apt install waincognito</code></pre>
+    <a href="apt/" class="btn">View APT Instructions</a>
+  </div>
+
+  <div class="card">
+    <h3>Fedora, RHEL & openSUSE (DNF / RPM)</h3>
+    <pre><code>curl -fsSL https://moodynooby.github.io/whatsapp-web-incognito/rpm/setup.sh | sudo bash
+sudo dnf install waincognito</code></pre>
+    <a href="rpm/" class="btn">View DNF / RPM Instructions</a>
+  </div>
+
+  <div class="card">
+    <h3>Arch Linux & Manjaro (pacman)</h3>
+    <pre><code>curl -fsSL https://moodynooby.github.io/whatsapp-web-incognito/arch/setup.sh | sudo bash
+sudo pacman -S waincognito</code></pre>
+    <a href="arch/" class="btn">View Arch Linux Instructions</a>
+  </div>
+</body>
+</html>
