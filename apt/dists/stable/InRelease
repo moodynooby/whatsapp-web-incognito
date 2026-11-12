@@ -8,40 +8,40 @@ Codename: stable
 Architectures: amd64 arm64
 Components: main
 Description: Official APT repository for WAIncognito (WhatsApp Incognito Desktop)
-Date: Thu, 05 Nov 2026 08:11:11 GMT
+Date: Thu, 12 Nov 2026 11:15:55 GMT
 Acquire-By-Hash: yes
 MD5Sum:
- 88bd485993508a8949a3cff09ed92769 736 main/binary-amd64/Packages
- 30ba1703bc9281bdebe91b733e4f495e 504 main/binary-amd64/Packages.gz
+ 574da180da6ba3b88ff2c8a55b554461 738 main/binary-amd64/Packages
+ 8a16b065d6b46816d54dc77c72fa6cad 505 main/binary-amd64/Packages.gz
  d41d8cd98f00b204e9800998ecf8427e 0 main/binary-arm64/Packages
  7029066c27ac6f5ef18d660d5741979a 20 main/binary-arm64/Packages.gz
- 194032e46d20cc9e6125cca4adce19db 588 main/binary-amd64/Packages.xz
+ 6181e02962340be96ede399b76c7a005 580 main/binary-amd64/Packages.xz
  8dc5aea5b03dff8595f096f9e368e888 32 main/binary-arm64/Packages.xz
 SHA1:
- 5f4aaa5e47091e381aa1e75160bdb2fd52c572af 736 main/binary-amd64/Packages
- da7866ca8960c4b6131fdf0a3f82769ea6ca7792 504 main/binary-amd64/Packages.gz
+ 5836dbfe30eefb4676458562884ad8608741cb9c 738 main/binary-amd64/Packages
+ 613f2d917ca7a53e4af072126eb06c2170470a02 505 main/binary-amd64/Packages.gz
  da39a3ee5e6b4b0d3255bfef95601890afd80709 0 main/binary-arm64/Packages
  46c6643f07aa7f6bfe7118de926b86defc5087c4 20 main/binary-arm64/Packages.gz
- b4b1f324d487d484fe79d43133d25fc56c60c432 588 main/binary-amd64/Packages.xz
+ bc8cbac8b2cc6ab59bf7f29fc09113cb8c6a8232 580 main/binary-amd64/Packages.xz
  9746882f4236fa1c3a8f86be2f1d9c46680c0b10 32 main/binary-arm64/Packages.xz
 SHA256:
- 2c0f60e1ed8aca2ca9588c561d53618051026f356373a392204be0acc8f1551b 736 main/binary-amd64/Packages
- 196b3b356da71e40d17ce513e61dc177b486bf3fc4c86db12b721ab650ce7f6a 504 main/binary-amd64/Packages.gz
+ fcf9422c52cf8fcb051c9067d952a0ed88ca09bac5852196eaad21f5e79c8c4c 738 main/binary-amd64/Packages
+ e6097581b39f7245df0c4afc85e250fccd9797e14533f55f3d7a4935b6f563f5 505 main/binary-amd64/Packages.gz
  e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 0 main/binary-arm64/Packages
  59869db34853933b239f1e2219cf7d431da006aa919635478511fabbfc8849d2 20 main/binary-arm64/Packages.gz
- 3f2fde3b6ea1a787843c48bccc86f0b8ca8f9066cc7d030a2824d1e772b6d174 588 main/binary-amd64/Packages.xz
+ 58d6bac65b8eec41eea3605fe4d518d0f3ec4f8192008eea8e86851b6ab91c23 580 main/binary-amd64/Packages.xz
  0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275 32 main/binary-arm64/Packages.xz
 SHA512:
- e2008eebdf5651323b5715842c6e6d37e6e5906652f975db79ab305192e09bcbd2fd70023b79434f0ddf6b47f5ebb471f31050358cf9a1ece280c76e945e6026 736 main/binary-amd64/Packages
- e15ccd170c7c7b087e84ba9df58ad0e66824d594d9ec8b1cb3e00421e0170ca4af76fd95eed5a5bcbbe9f41d7b0aef28fff82d662b393e6b5e14f1f63bf0f16a 504 main/binary-amd64/Packages.gz
+ d0930f7c890e82729620fb2a306d819ff25e733d79481b30e81c51043f47adf28fe696082af2356eea06fe5195a5132e2f8fdddf2c82fe2dd3c0cefa502ca47a 738 main/binary-amd64/Packages
+ 4e73f821fa7f381fe5b880b5e0b0fc17586edd384ae0bd3aa5780bb6473eea10c89d2a997796065d56a92457f73ee51bdd902d826d736dd8b4ce394d4ded1d08 505 main/binary-amd64/Packages.gz
  cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e 0 main/binary-arm64/Packages
  7e8e93f4a89ce7fae011403e14a1d53544c6e6f6b6010d61129dc27937806d2b03802610d7999eab33a4c36b0f9e001d9d76001b8354087634c1aa9c740c536f 20 main/binary-arm64/Packages.gz
- 5de04dd306eba46e14d4f653331a2fb332aec901e27a2309b68cdc955052824bed0932109af417398e1388c30051c984a75671721134ad0c4c41594be83a14a1 588 main/binary-amd64/Packages.xz
+ b820af681573018d73c841c18819627f45b5597856ef2905982f567e69606dc4e4ef2859e10a8e139293f7f17780a25f359ac83fc577243bbb95846e733feb13 580 main/binary-amd64/Packages.xz
  034b32f1138322638c7a5b7949a3b184c6a4cdfd003360a496c08c56c2cc645c94fbe9cdf9d84c963af6dda6c442717cd61d7e1cecf7024bd463f6f5196c5527 32 main/binary-arm64/Packages.xz
 -----BEGIN PGP SIGNATURE-----
 
-iHUEARYKAB0WIQSBjtWCY8Cz88rq8UYSGRtVZD/NzgUCauw6HwAKCRASGRtVZD/N
-ztrOAP43p7TtXfISGafx4MTYMUJkH8QFw0qX4aMulHIu0a1TCgEAnEZjT5lZjFCi
-NSLkFS6ZI/TzL1z4UH13goIt5zC6jgQ=
-=eRcJ
+iHUEARYKAB0WIQSBjtWCY8Cz88rq8UYSGRtVZD/NzgUCavWf6wAKCRASGRtVZD/N
+zlGrAQDh7z3wpyhEP5PpD5/YFtZL+R4BT9ptmWRf2i0sAro3jwEAvzE5CGeJlQiM
+WQPV1P/CeCzMDqS9DjVY0cKVR1jUdQ0=
+=43/J
 -----END PGP SIGNATURE-----
