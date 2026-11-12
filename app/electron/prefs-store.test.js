@@ -11,6 +11,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { PrefsStore, coerce } = require('./prefs-store.js');
+const { numericRanges } = require('./settings-menu.js');
 const meta = require('../.build/meta.json');
 
 const DEFAULTS = meta.prefs;   // derived from background.js by the build
@@ -144,4 +145,38 @@ test('no temp file is left behind after a write', () => {
   const s = new PrefsStore(dir, DEFAULTS);
   s.set({ safetyDelay: 3 });
   assert.ok(!fs.existsSync(path.join(dir, 'prefs.json.tmp')), 'tmp file should be renamed away');
+});
+
+test('privacyScreenLockIdleMinutes uses 1..60 numeric range from schema', () => {
+  const dir = tmpdir();
+  const s = new PrefsStore(dir, DEFAULTS, undefined, numericRanges());
+  const ok = s.set({ privacyScreenLockIdleMinutes: 15 });
+  assert.deepStrictEqual(ok.applied, ['privacyScreenLockIdleMinutes']);
+  assert.strictEqual(s.get().privacyScreenLockIdleMinutes, 15);
+
+  // Out-of-bounds falls back to current value (15)
+  s.set({ privacyScreenLockIdleMinutes: 0 });
+  assert.strictEqual(s.get().privacyScreenLockIdleMinutes, 15);
+  s.set({ privacyScreenLockIdleMinutes: 61 });
+  assert.strictEqual(s.get().privacyScreenLockIdleMinutes, 15);
+});
+
+test('privacyScreenLockPIN accepts empty string and 64-hex hash, rejecting invalid values', () => {
+  const dir = tmpdir();
+  const s = new PrefsStore(dir, DEFAULTS, undefined, numericRanges());
+  const hash = '03AC674216F3E15C761EE1A5E255F067953623C8B388B4459E13F978D7C846F4';
+  const r1 = s.set({ privacyScreenLockPIN: hash });
+  assert.deepStrictEqual(r1.applied, ['privacyScreenLockPIN']);
+  assert.strictEqual(s.get().privacyScreenLockPIN, hash.toLowerCase());
+
+  const rBad = s.set({ privacyScreenLockPIN: 'not-a-sha256' });
+  assert.deepStrictEqual(rBad.rejected, ['privacyScreenLockPIN']);
+  assert.strictEqual(s.get().privacyScreenLockPIN, hash.toLowerCase());
+
+  const rNonStr = s.set({ privacyScreenLockPIN: 1234 });
+  assert.deepStrictEqual(rNonStr.rejected, ['privacyScreenLockPIN']);
+
+  const rClear = s.set({ privacyScreenLockPIN: '' });
+  assert.deepStrictEqual(rClear.applied, ['privacyScreenLockPIN']);
+  assert.strictEqual(s.get().privacyScreenLockPIN, '');
 });

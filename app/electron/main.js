@@ -114,6 +114,9 @@ const { createWatchdog } = require('./watchdog.js');
 const { createTray, labelOf, counters } = require('./tray.js');
 const { buildSettingsTemplate, numericRanges } = require('./settings-menu.js');
 const desktopIntegration = require('./desktop-integration.js');
+const WAISettingsSchema = require('../../shared/settings_schema.js');
+const whitelistManager = require('./whitelist_manager.js');
+const ephemeralNotes = require('./ephemeral_notes.js');
 
 // Set before `ready` so the userData path (and therefore prefs.json) is stable and does
 // not depend on how the app was launched (`electron .` vs an installed shortcut).
@@ -127,6 +130,7 @@ const desktopIntegration = require('./desktop-integration.js');
 app.setName('WAIncognito');
 
 const BUILD_DIR = path.join(__dirname, '..', '.build');
+const HOOKS_DIR = path.join(__dirname, 'page-hooks');
 const IMAGES_DIR = path.join(__dirname, '..', '..', 'images');
 
 // Same icon as the extension (manifest.json `icons` + `action.default_icon`):
@@ -160,21 +164,15 @@ const BUILD_ARTIFACTS = Object.freeze([
   'shim.js', 'critical.js', 'main-rest.js', 'ui.js', 'deferred.js',
   'styles.js', 'assets.json', 'meta.json',
 ]);
+const HOOK_FILES = Object.freeze([
+  'native-ws.js', 'diagnostics.js', 'notifications.js',
+]);
 
 const APP_ID = 'com.wa-incognito.app';   // keep in sync with package.json build.appId
 
-// Shell-only defaults, merged over the interception defaults derived from
-// background.js at build time (scripts/build.mjs). They live here — NOT in
-// background.js — so the extension never sees them: there is no autostart
-// concept in a browser tab. The page ignores unknown keys by design
-// (shim.js applyPrefs / core/ui.js use explicit keys), so letting this flow
-// through sendPrefs/LIVE_PREFS needs no page change.
-const SHELL_DEFAULTS = Object.freeze({
-  // Start automatically on login. Applied by applyAutostart(): native login
-  // items on Windows/macOS, xdg-desktop-portal Background + an XDG autostart
-  // file fallback on Linux.
-  autostart: false,
-});
+// Shell-only defaults from shared/settings_schema.js (`scope: 'shell'`), merged
+// over the shared defaults derived from WAISettingsSchema.defaults('shared').
+const SHELL_DEFAULTS = Object.freeze(WAISettingsSchema.defaults('shell'));
 
 // ---------------------------------------------------------------- window state persistence (task 10)
 // Saved separately from PrefsStore (which owns interception prefs) to keep concerns clean.
@@ -496,17 +494,59 @@ function loadBuild() {
     app.exit(1);
     return null;
   }
-  return { meta, artifacts };
+
+  const hooks = {};
+  for (const name of HOOK_FILES) {
+    const file = path.join(HOOKS_DIR, name);
+    try {
+      hooks[name] = fs.readFileSync(file, 'utf8');
+    } catch (e) {
+      warn(`page hook ${name} unreadable: ${(e && e.message) || e}`);
+    }
+  }
+
+  return { meta, artifacts, hooks };
+}
+
+function readJsonMap(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      if (parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)) {
+        return parsed.data;
+      }
+      return parsed;
+    }
+  } catch (e) {
+    if (e && e.code !== 'ENOENT') warn(`could not read ${path.basename(filePath)}: ${e.message}`);
+  }
+  return {};
+}
+
+function writeJsonMap(filePath, data) {
+  const dir = path.dirname(filePath);
+  const tmp = `${filePath}.tmp`;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, data }, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmp, filePath);
 }
 
 // ---------------------------------------------------------------- app state
 
-/** @type {{meta: object, artifacts: object, prefs: PrefsStore, win: BrowserWindow|null,
- *          tray: any, watchdog: any, quitting: boolean, backgroundNotified: boolean, injections: number}} */
+/** @type {{meta: object, artifacts: object, hooks: object, prefs: PrefsStore,
+ *          whitelist: any, whitelistFile: string|null, notes: any, notesFile: string|null,
+ *          win: BrowserWindow|null, tray: any, watchdog: any, quitting: boolean,
+ *          backgroundNotified: boolean, injections: number}} */
 const state = {
   meta: null,
   artifacts: null,
+  hooks: null,
   prefs: null,
+  whitelist: null,
+  whitelistFile: null,
+  notes: null,
+  notesFile: null,
   win: null,
   tray: null,
   watchdog: null,
@@ -748,7 +788,7 @@ function runSelfTest(win) {
     const scripts = await q('document.scripts.length');
     const hook = await q('typeof window.wsHook === "object" && typeof window.wsHook.before === "function"');
     const wai = await q('typeof window.__WAI__');
-    const globals = await q('[typeof pako, typeof Pbf, typeof Tether, typeof Drop, typeof swal].join(",")');
+    const globals = await q('[typeof pako, typeof Pbf, typeof WAISettingsSchema, typeof WAISettingsRenderer, typeof WAIPageBus, typeof swal].join(",")');
     const banner = await q('(function(){var b=document.getElementById("wai-failure-banner");return b&&b.style.display!=="none"?b.textContent.slice(0,200):""})()');
 
     console.log('\n===== SELF TEST (real window) =====');
@@ -758,7 +798,7 @@ function runSelfTest(win) {
     console.log(`  scripts        ${scripts}`);
     console.log(`  wsHook.before  ${hook}`);
     console.log(`  window.__WAI__ ${wai}`);
-    console.log(`  pako,Pbf,Tether,Drop,swal = ${globals}`);
+    console.log(`  pako,Pbf,Schema,Renderer,PageBus,swal = ${globals}`);
     console.log(`  text length    ${text.length}`);
     if (banner) console.log(`  FAILURE BANNER ${banner}`);
     console.log('  ---- visible text ----');
@@ -1115,6 +1155,18 @@ function sendPrefs(prefs) {
   try { win.webContents.send('wai:prefs', prefs); } catch (e) { debug('send prefs:', e && e.message); }
 }
 
+function sendWhitelist(rules) {
+  const win = state.win;
+  if (!win || win.isDestroyed()) return;
+  try { win.webContents.send('wai:whitelist', rules); } catch (e) { debug('send whitelist:', e && e.message); }
+}
+
+function sendNotes(notes) {
+  const win = state.win;
+  if (!win || win.isDestroyed()) return;
+  try { win.webContents.send('wai:notes', notes); } catch (e) { debug('send notes:', e && e.message); }
+}
+
 function applyPatch(patch) {
   const result = state.prefs.set(patch);
   if (result.applied.length) {
@@ -1166,11 +1218,11 @@ function resetAllPrefs() {
  *
  * @returns {boolean} whether the request was delivered to a live page
  */
-function requestPageOptions() {
+function requestPageOptions(opts) {
   const win = state.win;
   if (!win || win.isDestroyed()) return false;
   try {
-    win.webContents.send('wai:open-options');
+    win.webContents.send('wai:open-options', opts && typeof opts === 'object' ? opts : {});
     return true;
   } catch (e) {
     warn(`could not ask the page for its options panel: ${(e && e.message) || e}`);
@@ -1207,6 +1259,10 @@ function openSettings() {
       header: [`Status: ${labelOf(status).long}`, counters(status)],
       apply: (patch) => applyPatch(patch),
       reset: resetAllPrefs,
+      openPinPrompt: () => {
+        if (win && !win.isDestroyed()) showWindow(win);
+        requestPageOptions({ focus: 'privacyScreenLockPIN' });
+      },
       // main.js is the only place that can hand Electron's Menu in; the builder itself
       // touches no Electron API, so it is testable under bare `node --test`.
       Menu,
@@ -1358,6 +1414,33 @@ function installIpc() {
     }
   });
 
+  ipcMain.on('wai:hook', (event, name) => {
+    try {
+      const cached = state.hooks && state.hooks[name];
+      if (typeof cached === 'string') return event.returnValue = { ok: true, source: cached };
+      if (HOOK_FILES.includes(name)) {
+        const disk = fs.readFileSync(path.join(HOOKS_DIR, name), 'utf8');
+        if (state.hooks) state.hooks[name] = disk;
+        return event.returnValue = { ok: true, source: disk };
+      }
+      event.returnValue = { ok: false, error: `unknown hook "${name}"` };
+    } catch (e) {
+      event.returnValue = { ok: false, error: (e && e.message) || String(e) };
+    }
+  });
+
+  ipcMain.on('wai:bootstrap', (event) => {
+    try {
+      event.returnValue = {
+        prefs: state.prefs ? state.prefs.get() : {},
+        whitelist: state.whitelist ? state.whitelist.getAll() : {},
+        notes: state.notes ? state.notes.getAll() : {},
+      };
+    } catch (e) {
+      event.returnValue = { prefs: {}, whitelist: {}, notes: {} };
+    }
+  });
+
   ipcMain.handle('wai:get-state', (event) => guard('wai:get-state', () => ({
     status: state.watchdog ? state.watchdog.snapshot() : { status: 'UNKNOWN' },
     prefs: state.prefs.get(),
@@ -1371,9 +1454,84 @@ function installIpc() {
     prefs: state.prefs.get(), applied: [], rejected: ['internal-error'],
   })());
 
-  // Note: there is deliberately no `wai:reset-prefs` handler. The tray resets prefs
-  // through a direct function reference, so an IPC route for it had zero callers — an
-  // unused privileged channel is worse than no channel.
+  ipcMain.handle('wai:reset-prefs', () => guard('wai:reset-prefs', () => resetAllPrefs(), state.prefs.get())());
+
+  ipcMain.handle('wai:whitelist-get', () => guard('wai:whitelist-get', () => (
+    state.whitelist ? state.whitelist.getAll() : {}
+  ), {})());
+
+  ipcMain.handle('wai:whitelist-set', (_event, payload) => guard('wai:whitelist-set', () => {
+    if (!state.whitelist || !payload || typeof payload !== 'object') {
+      return state.whitelist ? state.whitelist.getAll() : {};
+    }
+    const rules = state.whitelist.set(payload.jid, payload.rule);
+    if (state.whitelistFile) writeJsonMap(state.whitelistFile, rules);
+    sendWhitelist(rules);
+    return rules;
+  }, state.whitelist ? state.whitelist.getAll() : {})());
+
+  ipcMain.handle('wai:notes-get', () => guard('wai:notes-get', () => (
+    state.notes ? state.notes.getAll() : {}
+  ), {})());
+
+  ipcMain.handle('wai:notes-set', (_event, payload) => guard('wai:notes-set', () => {
+    if (!state.notes || !payload || typeof payload !== 'object') {
+      return state.notes ? state.notes.getAll() : {};
+    }
+    state.notes.setNote(payload.jid, payload.note);
+    const all = state.notes.getAll();
+    if (state.notesFile) writeJsonMap(state.notesFile, all);
+    sendNotes(all);
+    return all;
+  }, state.notes ? state.notes.getAll() : {})());
+
+  ipcMain.handle('wai:notes-delete', (_event, payload) => guard('wai:notes-delete', () => {
+    if (!state.notes || !payload || typeof payload !== 'object') {
+      return state.notes ? state.notes.getAll() : {};
+    }
+    state.notes.deleteNote(payload.jid);
+    const all = state.notes.getAll();
+    if (state.notesFile) writeJsonMap(state.notesFile, all);
+    sendNotes(all);
+    return all;
+  }, state.notes ? state.notes.getAll() : {})());
+
+  ipcMain.handle('wai:notes-clear', () => guard('wai:notes-clear', () => {
+    if (!state.notes) return {};
+    state.notes.clearAll();
+    if (state.notesFile) writeJsonMap(state.notesFile, {});
+    sendNotes({});
+    return {};
+  }, {})());
+
+  ipcMain.handle('wai:export-ephemeral-chat', async (event, payload) => {
+    try {
+      const data = payload && typeof payload === 'object' ? payload : {};
+      const jid = ephemeralNotes.normalizeJid(data.contactJid || data.jid || '');
+      const noteText = (state.notes && jid) ? state.notes.getNote(jid) : (data.notes || '');
+      const markdown = ephemeralNotes.exportSanitizedChat({
+        contactJid: jid || data.contactJid || data.jid || '',
+        contactName: data.contactName || data.name || jid || 'WhatsApp Chat',
+        messages: Array.isArray(data.messages) ? data.messages : [],
+        notes: noteText || data.notes || '',
+      });
+      const safeBase = String(jid || data.contactName || 'whatsapp-chat')
+        .replace(/[^a-zA-Z0-9._-]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'whatsapp-chat';
+      const parentWin = windowFor(event.sender) || (state.win && !state.win.isDestroyed() ? state.win : null);
+      const res = await dialog.showSaveDialog(parentWin, {
+        title: 'Export Sanitized Chat (Markdown)',
+        defaultPath: path.join(app.getPath('downloads'), `${safeBase}-sanitized.md`),
+        filters: [{ name: 'Markdown', extensions: ['md'] }],
+      });
+      if (res.canceled || !res.filePath) return { ok: false, canceled: true };
+      fs.writeFileSync(res.filePath, markdown, 'utf8');
+      return { ok: true, filePath: res.filePath };
+    } catch (e) {
+      error('wai:export-ephemeral-chat failed:', (e && e.stack) || e);
+      return { ok: false, error: (e && e.message) || String(e) };
+    }
+  });
 
   // Force the injection sequence again. The preload re-runs only the steps that have
   // not already succeeded in THIS document: re-evaluating ws_hook.js over a live page
@@ -1548,7 +1706,9 @@ function startDevBridge(win, artifacts) {
       // only way to pick up new bundle text, and it is cheap here because the session
       // partition (C5) preserves the login.
       guard('dev:reload', () => {
-        state.artifacts = loadBuild().artifacts;
+        const nextBuild = loadBuild();
+        state.artifacts = nextBuild.artifacts;
+        state.hooks = nextBuild.hooks;
         if (state.win && !state.win.isDestroyed()) state.win.reload();
         log('dev: bundles changed — reloading the page (login is preserved)');
       })();
@@ -1807,17 +1967,25 @@ function boot() {
     if (!build) return;                          // loadBuild already showed a dialog
     state.meta = build.meta;
     state.artifacts = build.artifacts;
+    state.hooks = build.hooks;
 
+    const userDataDir = app.getPath('userData');
     guard('PrefsStore', () => {
       // The numeric bounds come from the settings table, so the range a value is validated
       // against and the set of values the menu offers cannot drift apart.
       state.prefs = new PrefsStore(
-        app.getPath('userData'),
-        { ...build.meta.prefs, ...SHELL_DEFAULTS },
+        userDataDir,
+        { ...(build.meta && build.meta.prefs ? build.meta.prefs : WAISettingsSchema.defaults('shared')), ...SHELL_DEFAULTS },
         undefined,
         numericRanges(),
       );
       log(`prefs loaded (${Object.keys(state.prefs.get()).length} keys) from userData`);
+    })();
+    guard('Whitelist & Notes', () => {
+      state.whitelistFile = path.join(userDataDir, 'whitelist.json');
+      state.whitelist = whitelistManager.createWhitelistStore(readJsonMap(state.whitelistFile));
+      state.notesFile = path.join(userDataDir, 'ephemeral-notes.json');
+      state.notes = ephemeralNotes.createEphemeralNotesStore(readJsonMap(state.notesFile));
     })();
     if (!state.prefs) {
       // loadBuild validated the JSON but not its shape, and PrefsStore refuses to run

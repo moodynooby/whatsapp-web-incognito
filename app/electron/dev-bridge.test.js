@@ -20,9 +20,29 @@ test('the page shim is hot, because it is bundled rather than loaded as shell co
   assert.strictEqual(classifyChange(['app/electron/shim.js']).scope, 'bundles');
 });
 
-test('styles.css and manifest.json are hot', () => {
+test('styles.css, manifest.json, popup, and browser-only shared modules are hot', () => {
   assert.strictEqual(classifyChange(['styles.css']).scope, 'bundles');
   assert.strictEqual(classifyChange(['manifest.json']).scope, 'bundles');
+  assert.strictEqual(classifyChange(['popup.html']).scope, 'bundles');
+  assert.strictEqual(classifyChange(['popup.js']).scope, 'bundles');
+  assert.strictEqual(classifyChange(['shared/settings_renderer.js']).scope, 'bundles');
+  assert.strictEqual(classifyChange(['shared/wai_page_bus.js']).scope, 'bundles');
+});
+
+test('shell-consumed shared modules, settings menu, and page-hooks force a relaunch', () => {
+  for (const f of [
+    'app/electron/settings-menu.js',
+    'app/electron/page-hooks/native-ws.js',
+    'app/electron/page-hooks/diagnostics.js',
+    'app/electron/page-hooks/notifications.js',
+    'app/electron/page-hooks/watchdog-probe.js',
+    'shared/settings_schema.js',
+    'shared/bundle_manifest.js',
+    'shared/jid_utils.js',
+    'shared/ephemeral_utils.js',
+  ]) {
+    assert.strictEqual(classifyChange([f]).scope, 'app', `${f} should force a relaunch`);
+  }
 });
 
 test('shell edits force a relaunch', () => {

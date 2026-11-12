@@ -45,9 +45,10 @@ const { contextBridge, ipcRenderer, webFrame } = require('electron');
 let fs = null;
 try { fs = require('fs'); } catch (e) { fs = null; }
 
-// app/.build sits one level up from app/electron. Concatenated rather than
+// app/.build and app/electron/page-hooks relative to preload. Concatenated rather than
 // path.join'd because `path` is not a guaranteed builtin in the sandbox either.
 const BUILD_DIR = `${__dirname}/../.build/`;
+const HOOKS_DIR = `${__dirname}/page-hooks/`;
 
 // ------------------------------------------------------------------ logging
 
@@ -97,13 +98,32 @@ function readArtifact(name) {
   return src;
 }
 
-// ------------------------------------------------------------------ prefs (C4)
+const hookCache = Object.create(null);
 
-// The page's getOptions must answer SYNCHRONOUSLY: ui.js:23 passes a callback but reads
-// the result immediately after, so a round-trip to the main process would race it. The
-// live values therefore ride in on argv (main sets
-// `additionalArguments: ['--wai-prefs=' + JSON.stringify(livePrefs)]`) and are inlined
-// into the shim source as a literal before it is evaluated.
+function readHook(name) {
+  if (typeof hookCache[name] === 'string') return hookCache[name];
+  let src = null;
+  if (fs) {
+    try { src = fs.readFileSync(`${HOOKS_DIR}${name}`, 'utf8'); } catch (e) { src = null; }
+  }
+  if (src === null) {
+    let reply = null;
+    try { reply = ipcRenderer.sendSync('wai:hook', name); } catch (e) { reply = null; }
+    if (reply && reply.ok && typeof reply.source === 'string') src = reply.source;
+  }
+  if (src === null) {
+    throw new Error(`page hook ${name} is unavailable`);
+  }
+  hookCache[name] = src;
+  return src;
+}
+
+// ------------------------------------------------------------------ prefs & bootstrap (C4)
+
+// The page's getOptions must answer SYNCHRONOUSLY: ui.js passes a callback and reads
+// the result immediately after, so an async round-trip to main would race it.
+// Initial prefs ride in on argv; on launch or reload we also read live state via sendSync
+// AFTER critical.js has armed WebSocket interception (C1).
 const LIVE_PREFS = (() => {
   const raw = argValue('wai-prefs');
   if (!raw) return null;
@@ -116,18 +136,17 @@ const LIVE_PREFS = (() => {
   }
 })();
 
-/**
- * Swap the build-time defaults baked into the generated shim for the live values.
- * Returns the source plus whether the substitution actually matched — a silent no-op here
- * would leave a user's saved prefs ignored with nothing to show for it.
- */
-function withLivePrefs(src) {
-  if (!LIVE_PREFS) return { source: src, substituted: false };
-  const literal = `var PREFS = ${JSON.stringify(LIVE_PREFS, null, 2)};`;
-  // The build emits `var PREFS = {` … `};` from JSON.stringify(meta.prefs, null, 2) and
-  // the object is flat (booleans and one number), so the first `};` closes it.
-  const replaced = src.replace(/var PREFS = \{[\s\S]*?\};/, literal);
-  return { source: replaced, substituted: replaced !== src };
+function readBootstrap() {
+  const boot = { prefs: LIVE_PREFS || {}, whitelist: {}, notes: {} };
+  try {
+    const reply = ipcRenderer.sendSync('wai:bootstrap');
+    if (reply && typeof reply === 'object') {
+      if (reply.prefs && typeof reply.prefs === 'object') boot.prefs = reply.prefs;
+      if (reply.whitelist && typeof reply.whitelist === 'object') boot.whitelist = reply.whitelist;
+      if (reply.notes && typeof reply.notes === 'object') boot.notes = reply.notes;
+    }
+  } catch (e) { /* fall back to argv prefs + empty maps */ }
+  return boot;
 }
 
 // ------------------------------------------------------------------ state
@@ -201,9 +220,53 @@ function installBridge() {
       }
     },
 
+    resetPrefs: () => {
+      try { return ipcRenderer.invoke('wai:reset-prefs'); }
+      catch (e) { log('resetPrefs invoke failed:', (e && e.message) || e); return null; }
+    },
+
+    getWhitelist: () => {
+      try { return ipcRenderer.invoke('wai:whitelist-get'); }
+      catch (e) { return null; }
+    },
+
+    setWhitelistRule: (payload) => {
+      try { return ipcRenderer.invoke('wai:whitelist-set', payload); }
+      catch (e) { return null; }
+    },
+
+    getNotes: () => {
+      try { return ipcRenderer.invoke('wai:notes-get'); }
+      catch (e) { return null; }
+    },
+
+    setNote: (payload) => {
+      try { return ipcRenderer.invoke('wai:notes-set', payload); }
+      catch (e) { return null; }
+    },
+
+    deleteNote: (payload) => {
+      try { return ipcRenderer.invoke('wai:notes-delete', payload); }
+      catch (e) { return null; }
+    },
+
+    clearNotes: () => {
+      try { return ipcRenderer.invoke('wai:notes-clear'); }
+      catch (e) { return null; }
+    },
+
+    exportEphemeralChat: (payload) => {
+      try { return ipcRenderer.invoke('wai:export-ephemeral-chat', payload); }
+      catch (e) { return null; }
+    },
+
     /** The page raised the visible failure banner. */
     reportFailure: (reason, detail) => {
       try { ipcRenderer.send('wai:failure', String(reason), String(detail || '')); } catch (e) { /* ignore */ }
+    },
+
+    log: (level, ...args) => {
+      forward(level || 'log', args);
     },
 
     /** Relay a notification from the page world to the main process Notification API. */
@@ -215,43 +278,6 @@ function installBridge() {
 }
 
 // ------------------------------------------------------------------ steps
-
-/**
- * Capture the native WebSocket constructor BEFORE core/ws_hook.js reassigns the global.
- * The shim reads window.__WAI_NATIVE_WS__ to learn the real readyState for the socket
- * status, which is how the watchdog can tell "connected" from "quiet" (§9.4).
- */
-const NATIVE_WS_SRC = 'window.__WAI_NATIVE_WS__ = window.__WAI_NATIVE_WS__ || window.WebSocket;';
-
-/**
- * Forward only what is cheap and high-signal: uncaught errors always, the page console
- * only when explicitly enabled. core/ runs with WALogs = true and logs per frame, so an
- * unconditional console forward would be an IPC firehose competing with the very socket
- * we are trying to protect.
- */
-const DIAG_SRC = `(function () {
-  if (window.__WAI_DIAG__) return;
-  window.__WAI_DIAG__ = { errors: 0, rejections: 0, console: 0 };
-  var emit = function (kind, args) {
-    window.__WAI_DIAG__[kind]++;
-    try { if (window.__WAI_IPC__ && window.__WAI_IPC__.reportFailure) {
-      window.__WAI_IPC__.reportFailure('uncaught ' + kind, String(args[0] || args));
-    } } catch (e) {}
-  };
-  window.addEventListener('error', function (e) { emit('errors', [e && e.message]); });
-  window.addEventListener('unhandledrejection', function (e) { emit('rejections', [e && e.reason]); });
-  if (window.__WAI_LOG_PAGE__) {
-    ['log', 'info', 'warn', 'error'].forEach(function (k) {
-      var orig = console[k];
-      console[k] = function () {
-        try { if (window.__WAI_IPC__ && window.__WAI_IPC__.log) {
-          window.__WAI_IPC__.log.apply(null, [k].concat(Array.prototype.slice.call(arguments)));
-        } } catch (e) {}
-        return orig.apply(console, arguments);
-      };
-    });
-  }
-})();`;
 
 function evaluate(name, code) {
   return webFrame.executeJavaScript(code).then(
@@ -299,48 +325,21 @@ function runSequence(reason) {
   if (!state.injectedAt) state.injectedAt = startedAt;
 
   const steps = [
-    // 1. The bridge has to exist before the shim runs: the shim captures
-    //    window.__WAI_IPC__ at IIFE entry and calls host.booted() at the end.
+    // 1. The bridge has to exist before any hook or shim runs (C2).
     once('bridge', () => { installBridge(); state.done.bridge = true; }),
 
-    // 1b. THE HARD DEADLINE, taken as early as possible. Do not "tidy" this order.
-    //     core/ws_hook.js is 2.6 KB and references nothing from the shim (verified: no
-    //     chrome./browser./__WAI__ use), so it needs no predecessor. Every step hoisted
-    //     above `critical` is an extra async hop through the renderer added to the one
-    //     deadline that decides whether interception silently works at all (C1).
-    once('nativeWs', () => evaluate('nativeWs', NATIVE_WS_SRC)),
+    // 1b. THE HARD DEADLINE, taken as early as possible (C1).
+    once('nativeWs', () => evaluate('nativeWs', readHook('native-ws.js'))),
     once('critical', () => evaluate('critical', readArtifact('critical.js'))),
 
-    // 1c. Take over window.Notification as early as the bridge allows. This used to wait
-    // for the shim's 'booted' event, which is emitted at the END of the shim's IIFE —
-    // after the 1.3 MB main group, i.e. well after WhatsApp's first paint. Two failures
-    // came of that: a message that arrived in the gap was dropped, and if 'booted' never
-    // arrived at all (injection lost, document replaced, sequence failed before the shim)
-    // the interceptor was never installed and NO notification worked for the whole session.
-    //
-    // The only dependency is the contextBridge handle, which installBridge() has just
-    // published, so it goes here rather than further down. It is idempotent by
-    // construction (the IIFE guards on __WAI_NOTIF_PATCHED__), so the retry path re-running
-    // it is safe and costs one no-op evaluate.
-    once('notifications', () => callPage('notifications', NOTIFICATION_INTERCEPT_SRC)),
+    // 1c. Take over window.Notification early using the bridge.
+    once('notifications', () => callPage('notifications', readHook('notifications.js'))),
 
-    // 2. window.chrome/browser + window.__WAI__ + the failure banner. Required before
-    //    the ui group (ui.js:12 aliases `browser` from `chrome`), not before ws_hook.
-    once('shim', () => {
-      const { source, substituted } = withLivePrefs(readArtifact('shim.js'));
-      return evaluate('shim', source).then(() => {
-        if (!substituted) {
-          // Defensive: if the build ever stops emitting a substitutable PREFS literal,
-          // push the live values in immediately after instead of silently running on
-          // defaults. Still synchronous, so ui.js:23 cannot race it.
-          debug('PREFS literal not found in the built shim; applying live prefs after eval');
-          return callPage('prefsFallback', `window.__WAI__ && window.__WAI__.setPrefs(${JSON.stringify(LIVE_PREFS || {})});`);
-        }
-        return null;
-      });
-    }),
+    // 2. Synchronous bootstrap + shim (C4: zero regex substitution).
+    once('bootstrap', () => evaluate('bootstrap', `window.__WAI_BOOTSTRAP__ = ${JSON.stringify(readBootstrap())};`)),
+    once('shim', () => evaluate('shim', readArtifact('shim.js'))),
 
-    once('diagnostics', () => evaluate('diagnostics', DIAG_SRC)),
+    once('diagnostics', () => evaluate('diagnostics', (PAGE_LOG ? 'window.__WAI_LOG_PAGE__ = true;\n' : '') + readHook('diagnostics.js'))),
 
     // 3. C4: the page CSP refuses shell-owned schemes, so CSS arrives as one inline
     //    <style> (style-src permits 'unsafe-inline') rather than a <link>.
@@ -443,7 +442,10 @@ function injectUi() {
 // Execution order, kept as a single source of truth so the retry policy's "still
 // pending" report can never drift from the sequence itself. `nativeWs` and `critical`
 // come first because ws_hook.js has the only hard deadline (C1).
-const STEP_ORDER = ['bridge', 'nativeWs', 'critical', 'shim', 'diagnostics', 'styles', 'mainRest', 'deferred', 'arm', 'ui'];
+const STEP_ORDER = [
+  'bridge', 'nativeWs', 'critical', 'notifications',
+  'bootstrap', 'shim', 'diagnostics', 'styles', 'mainRest', 'deferred', 'arm', 'ui',
+];
 
 function pendingSteps() {
   return STEP_ORDER.filter((k) => !state.done[k]);
@@ -483,12 +485,22 @@ ipcRenderer.on('wai:rearm', () => { retryMissing('host-rearm'); });
 // page itself (C1 — webContents.executeJavaScript is load-gated), so without this the shell
 // would know it had asked but not whether anything appeared, and "unavailable" is exactly
 // the case worth being able to diagnose.
-ipcRenderer.on('wai:open-options', () => {
-  callPage('openOptions', 'window.__WAI__ && window.__WAI__.openOptions()')
+ipcRenderer.on('wai:open-options', (_event, opts) => {
+  callPage('openOptions', `window.__WAI__ && window.__WAI__.openOptions(${JSON.stringify(opts || {})})`)
     .then((opened) => {
       debug(`page options panel: ${opened === true ? 'opened' : 'unavailable'}`);
       sendSnapshot('options-panel', { opened: opened === true });
     });
+});
+
+ipcRenderer.on('wai:whitelist', (_event, rules) => {
+  if (!rules || typeof rules !== 'object') return;
+  callPage('whitelist', `window.__WAI__ && window.__WAI__.setWhitelist && window.__WAI__.setWhitelist(${JSON.stringify(rules)});`);
+});
+
+ipcRenderer.on('wai:notes', (_event, notes) => {
+  if (!notes || typeof notes !== 'object') return;
+  callPage('notes', `window.__WAI__ && window.__WAI__.setNotes && window.__WAI__.setNotes(${JSON.stringify(notes)});`);
 });
 
 // The renderer lifecycle signal, forwarded by main because a sandboxed preload has no
@@ -496,101 +508,6 @@ ipcRenderer.on('wai:open-options', () => {
 // step that lost a race with frame readiness would never be retried and the hook would
 // silently not exist.
 ipcRenderer.on('wai:frame-event', (_event, name) => { retryMissing(name); });
-
-// ------------------------------------------------------------------ notification interception (from WhatsLNX)
-// Override window.Notification so WhatsApp Web's own notification calls are routed to
-// the main process Notification API, which works correctly on every OS including Linux
-// with DBus-based notification daemons. This runs in the ISOLATED world (preload scope),
-// so we inject into the page world via a tiny evaluate call once the bridge is ready.
-//
-// Two interception points:
-//   1. window.Notification constructor — the standard browser notifications API
-//   2. ServiceWorkerRegistration.prototype.showNotification — WA sometimes calls this
-//      from its service worker
-//
-// NEITHER path calls through. Relaying AND invoking the original is what the first
-// revision of this port did, which is the opposite of what its own comment claimed:
-// every message arrived twice, once from the Electron Notification in main and once from
-// Chromium's own. So this is a replacement, not a proxy — which also means a message
-// shown before the patch lands (the injection races the page's first paint) is simply
-// lost, rather than arriving twice. Losing one is the better failure.
-const NOTIFICATION_INTERCEPT_SRC = `(function () {
-  if (window.__WAI_NOTIF_PATCHED__) return;
-  window.__WAI_NOTIF_PATCHED__ = true;
-  var _OriginalNotification = window.Notification;
-
-  // WhatsApp de-dupes its own banners by the 'tag' option, reusing one to replace a
-  // message already on screen. Chromium honours that; the Electron Notification we
-  // relay to does not, because it has no notion of a tag. Without this the user gets one
-  // native popup per update to a conversation they are already looking at, so the tag is
-  // tracked here and a repeat within the window is dropped.
-  var _lastTag = null;
-  var _lastTagAt = 0;
-  var TAG_TTL = 5000;
-
-  function relay(title, options) {
-    options = options || {};
-    var tag = options.tag || '';
-    if (tag) {
-      var now = Date.now();
-      if (tag === _lastTag && (now - _lastTagAt) < TAG_TTL) return;
-      _lastTag = tag;
-      _lastTagAt = now;
-    }
-    try {
-      if (window.__WAI_IPC__ && window.__WAI_IPC__.sendNotification) {
-        window.__WAI_IPC__.sendNotification({
-          title: title || 'Whatsapp Incognito',
-          body: options.body || '',
-          iconUrl: options.icon || '',
-          silent: options.silent === true,
-          tag: tag,
-        });
-      }
-    } catch (e) {}
-  }
-
-  window.Notification = function (title, options) {
-    relay(title, options);
-    // Return a stand-in EventTarget so WA Web's .close(), .addEventListener, .onclick assignments do not throw.
-    var target = (typeof EventTarget !== 'undefined') ? new EventTarget() : {};
-    target.title = title || '';
-    target.close = function () {};
-    target.onclick = null;
-    target.onerror = null;
-    target.onclose = null;
-    target.onshow = null;
-    if (typeof target.addEventListener !== 'function') {
-      target.addEventListener = function () {};
-      target.removeEventListener = function () {};
-      target.dispatchEvent = function () { return true; };
-    }
-    return target;
-  };
-  window.Notification.requestPermission = function () { return Promise.resolve('granted'); };
-  // Only the accessor. Assigning window.Notification.permission first and then defining
-  // the same property was the second bug here: the plain assignment is silently dropped
-  // on a function object in some engines and the defineProperty wins anyway, so the
-  // first line was dead weight pretending to grant permission.
-  Object.defineProperty(window.Notification, 'permission', {
-    get: function () { return 'granted'; },
-    configurable: true,
-  });
-  if (_OriginalNotification) window.Notification.prototype = _OriginalNotification.prototype;
-
-  if ('ServiceWorkerRegistration' in window && ServiceWorkerRegistration.prototype.showNotification) {
-    ServiceWorkerRegistration.prototype.showNotification = function (title, options) {
-      // Relay only. Calling the original here as well is what produced the duplicate.
-      relay(title, options);
-      return Promise.resolve();
-    };
-  }
-})();`;
-
-// Installed by runSequence as the `notifications` step, right after the bridge exists —
-// deliberately NOT here. See the step's comment for why waiting for 'booted' lost
-// notifications. The IIFE's __WAI_NOTIF_PATCHED__ guard makes a re-run a no-op, so the
-// sequence's retry path can repeat it safely.
 
 // ------------------------------------------------------------------ go
 

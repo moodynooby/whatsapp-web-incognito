@@ -38,15 +38,16 @@ const PORT = Number(opt('port') || process.env.WAI_DEV_PORT || 7311);
 const HOST = '127.0.0.1';
 const RUN_VERIFY = !flag('no-verify');
 
-/** Directories whose contents are page-world code, i.e. hot-reloadable. */
-const HOT_DIRS = ['core', 'lib', 'images'];
+/** Directories whose contents are page-world code or shared helpers. */
+const HOT_DIRS = ['core', 'lib', 'shared', 'images'];
 /** Individual files that feed the bundles. */
-const HOT_FILES = ['styles.css', 'manifest.json', 'background.js', 'core_injection.js', 'app/electron/shim.js'];
+const HOT_FILES = ['styles.css', 'manifest.json', 'background.js', 'core_injection.js', 'popup.html', 'popup.js', 'app/electron/shim.js'];
 
 /** Files whose changes mean "restart the app", watched but classified elsewhere. */
 const SHELL_FILES = [
   'app/electron/main.js', 'app/electron/preload.js', 'app/electron/watchdog.js',
-  'app/electron/tray.js', 'app/electron/prefs-store.js', 'app/electron/dev-bridge.js',
+  'app/electron/tray.js', 'app/electron/settings-menu.js', 'app/electron/prefs-store.js',
+  'app/electron/dev-bridge.js', 'app/electron/whitelist_manager.js', 'app/electron/ephemeral_notes.js',
   'package.json',
 ];
 
@@ -196,8 +197,9 @@ function startWatching() {
   for (const f of SHELL_FILES) {
     if (existsSync(join(ROOT, f))) watch(join(ROOT, f), () => scheduleRebuild([f]));
   }
+  watchPath(join(ROOT, 'app/electron/page-hooks'), (f) => scheduleRebuild(f), 'app/electron/page-hooks');
   watchPath(join(ROOT, 'patches'), (f) => scheduleRebuild(f), 'patches');
-  console.log(`  watching    ${HOT_DIRS.length} dirs, ${HOT_FILES.length + SHELL_FILES.length} files, patches/`);
+  console.log(`  watching    ${HOT_DIRS.length} dirs, ${HOT_FILES.length + SHELL_FILES.length} files, page-hooks/, patches/`);
 }
 
 // ---------------------------------------------------------------- launch

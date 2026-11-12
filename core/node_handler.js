@@ -72,7 +72,14 @@ NodeHandler.isSentNodeAllowed = function (node)
                 {
                     // We do not allow sending this read receipt.
                     // invoke the callback and fake a failure response from server
-                    document.dispatchEvent(new CustomEvent('onReadConfirmationBlocked', { detail: jid }));
+                    if (typeof WAIPageBus !== "undefined" && WAIPageBus.emit)
+                    {
+                        WAIPageBus.emit('onReadConfirmationBlocked', jid);
+                    }
+                    else
+                    {
+                        document.dispatchEvent(new CustomEvent('onReadConfirmationBlocked', { detail: jid }));
+                    }
 
                     // TODO: Is the unsent message problem due to blocking read-self?
                     // why there are read receipts we need to block after sending a message to a lot of people?
@@ -184,8 +191,17 @@ NodeHandler.onSentEncNode = async function (encNode, remoteJid)
         if (!remoteJid.includes(":"))
         {
             var chat = await getChatByJID(remoteJid);
-            var data = { jid: getJidOfChat(chat), index: chat.lastReceivedKey.id, fromMe: chat.lastReceivedKey.fromMe, unreadCount: chat.unreadCount };
-            setTimeout(function () { document.dispatchEvent(new CustomEvent('sendReadConfirmation', { detail: JSON.stringify(data) })); }, 600);
+            if (chat)
+            {
+                var lastKey = chat.lastReceivedKey || {};
+                var data = { jid: getJidOfChat(chat), index: lastKey.id, fromMe: lastKey.fromMe, unreadCount: chat.unreadCount };
+                setTimeout(function () {
+                    if (typeof WAIPageBus !== "undefined" && WAIPageBus.sendToPage)
+                        WAIPageBus.sendToPage('receipt:send', data);
+                    else
+                        document.dispatchEvent(new CustomEvent('sendReadConfirmation', { detail: JSON.stringify(data) }));
+                }, 600);
+            }
         }
     }
 

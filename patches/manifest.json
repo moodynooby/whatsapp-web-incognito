@@ -15,6 +15,8 @@
     "core/ui_class_names.js",
     "core/utils.js",
     "core/ws_hook.js",
+    "lib/css/drop-theme-basic.css",
+    "lib/drop.js",
     "lib/pako.js",
     "lib/pbf.3.0.5.min.js"
   ],
@@ -198,6 +200,16 @@
       "why": "Upstream ships pako as bare source (no UMD wrapper, exports commented out) and pbf with dead `!1` branch conditions. Without the UMD wrapper, scripts/build.mjs isUmdBundle() does not match either file, so wrapUmd() is skipped and the emitted electron bundle has no global-branch guard — A-umd/A-umd2 fail and (pre-fix) the page's AMD define would make pako/Pbf publish nothing. Restoring the pre-merge UMD forms makes isUmdBundle() match again and keeps the guard in the emitted bundle.",
       "risk": "low",
       "assertion": "A-umd, A-umd2, A7"
+    },
+    {
+      "id": "P15",
+      "file": "core/interception.js, core/ui.js, core/injected_ui.js, core/status_download.js, core/utils.js, lib/drop.js, lib/css/drop-theme-basic.css",
+      "status": "applied",
+      "summary": "Unify settings, JID normalization, page-to-host messaging, and native-looking WhatsApp page UI across targets.",
+      "kind": "architecture",
+      "why": "Initialize enforcing globals from WAISettingsSchema, replace legacy Drop/Tether 3-page carousel with WAISettingsRenderer modal + toolbar popup (retiring lib/drop.js and lib/css/drop-theme-basic.css), eliminate redundant startup messages and listener leaks in core/ui.js, remove chat header override/Private Note/Export controls so only the compact settings trigger/modal plus blocked-receipt indicators remain on WhatsApp Web, move option ownership into enforcing modules, and merge body MutationObservers via shared/wai_page_bus.js.",
+      "risk": "low",
+      "assertion": "A-umd, A-prefs, A-panelkeys, A7"
     }
   ],
   "encoding": {

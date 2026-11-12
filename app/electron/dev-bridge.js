@@ -113,14 +113,16 @@ function classifyChange(changed) {
   // half-applied shell change is worse than a redundant relaunch. Test files are
   // excluded — editing a test must never restart a running app.
   const appHits = changed.filter((f) =>
-    /^app\/electron\/(?!shim\.js$)(?!.*\.test\.js$)[^/]+\.js$/.test(f) || f === 'package.json');
+    /^app\/electron\/(?!shim\.js$)(?!.*\.test\.js$)(?:page-hooks\/[^/]+\.js$|[^/]+\.js$)/.test(f) ||
+    /^shared\/(settings_schema|bundle_manifest|jid_utils|ephemeral_utils)\.js$/.test(f) ||
+    f === 'package.json');
   if (appHits.length) return { scope: 'app', reason: `shell: ${appHits.join(', ')}` };
 
-  // shim.js is page-world code, not shell code: it is bundled, so it is hot.
+  // shim.js, popup, and browser-only shared modules are bundled, so they are hot.
   const bundleHits = changed.filter((f) =>
-    /^(core|lib)\//.test(f) ||
+    /^(core|lib|shared)\//.test(f) ||
     /^app\/electron\/shim\.js$/.test(f) ||
-    /^(styles\.css|manifest\.json|background\.js|core_injection\.js)$/.test(f) ||
+    /^(styles\.css|manifest\.json|background\.js|core_injection\.js|popup\.html|popup\.js)$/.test(f) ||
     /^patches\//.test(f));
   if (bundleHits.length) return { scope: 'bundles', reason: `bundles: ${bundleHits.join(', ')}` };
 

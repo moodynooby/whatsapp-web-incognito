@@ -17,8 +17,17 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const WAISettingsSchema = require('../../shared/settings_schema.js');
 
 const FILE_VERSION = 1;
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/i;
+
+function effectiveRangeFor(key, ranges) {
+  if (ranges && ranges[key]) return ranges[key];
+  const spec = WAISettingsSchema.getSpec(key);
+  if (spec && spec.type === 'secret-hash') return { pattern: SHA256_HEX_RE };
+  return undefined;
+}
 
 class PrefsStore {
   /**
@@ -75,7 +84,8 @@ class PrefsStore {
     // default instead of coming back undefined, and validate every value by type.
     for (const k of this.keys) {
       if (Object.prototype.hasOwnProperty.call(stored, k)) {
-        this.prefs[k] = coerce(this.defaults[k], stored[k], this.defaults[k], this.ranges[k]);
+        const coerced = coerce(this.defaults[k], stored[k], this.defaults[k], effectiveRangeFor(k, this.ranges));
+        this.prefs[k] = coerced === undefined ? this.defaults[k] : coerced;
       }
     }
     return this.prefs;
@@ -121,7 +131,7 @@ class PrefsStore {
 
     for (const [k, v] of Object.entries(patch)) {
       if (!Object.prototype.hasOwnProperty.call(this.defaults, k)) { rejected.push(k); continue; }
-      const next = coerce(this.defaults[k], v, this.prefs[k], this.ranges[k]);
+      const next = coerce(this.defaults[k], v, this.prefs[k], effectiveRangeFor(k, this.ranges));
       if (next === undefined) { rejected.push(k); continue; }
       this.prefs[k] = next;
       applied.push(k);
@@ -166,6 +176,15 @@ function coerce(defaultValue, value, currentValue, range) {
     const max = range && Number.isFinite(range.max) ? range.max : 30;
     if (n < min || n > max) return currentValue ?? defaultValue;
     return n;
+  }
+  if (typeof defaultValue === 'string') {
+    if (typeof value !== 'string') return undefined;
+    if (range && range.pattern instanceof RegExp) {
+      const trimmed = value.trim();
+      if (trimmed === '') return '';
+      return range.pattern.test(trimmed) ? trimmed.toLowerCase() : undefined;
+    }
+    return value;
   }
   return value === undefined ? currentValue : value;
 }

@@ -2,16 +2,17 @@
 // Interception of WhatsApp packets and handling nodes
 //
 
-// Global enforcing variables
-var readConfirmationsHookEnabled = true;
-var onlineUpdatesHookEnabled = false;
-var typingUpdatesHookEnabled = false;
-var saveDeletedMsgsHookEnabled = false;
-var showDeviceTypesEnabled = true;
-var stealthVoiceNotesEnabled = false;
-var mediaAutoDownloadGuardEnabled = false;
-var autoReceiptOnReplay = true;
-var safetyDelay = 0;
+// Global enforcing variables (initialized from shared schema defaults when available)
+var _waiDefaults = typeof WAISettingsSchema !== 'undefined' ? WAISettingsSchema.defaults('shared') : {};
+var readConfirmationsHookEnabled = _waiDefaults.readConfirmationsHook !== undefined ? _waiDefaults.readConfirmationsHook : true;
+var onlineUpdatesHookEnabled = _waiDefaults.onlineUpdatesHook !== undefined ? _waiDefaults.onlineUpdatesHook : false;
+var typingUpdatesHookEnabled = _waiDefaults.typingUpdatesHook !== undefined ? _waiDefaults.typingUpdatesHook : false;
+var saveDeletedMsgsHookEnabled = _waiDefaults.saveDeletedMsgs !== undefined ? _waiDefaults.saveDeletedMsgs : true;
+var showDeviceTypesEnabled = _waiDefaults.showDeviceTypes !== undefined ? _waiDefaults.showDeviceTypes : true;
+var stealthVoiceNotesEnabled = _waiDefaults.stealthVoiceNotes !== undefined ? _waiDefaults.stealthVoiceNotes : false;
+var mediaAutoDownloadGuardEnabled = _waiDefaults.mediaAutoDownloadGuard !== undefined ? _waiDefaults.mediaAutoDownloadGuard : false;
+var autoReceiptOnReplay = _waiDefaults.autoReceiptOnReplay !== undefined ? _waiDefaults.autoReceiptOnReplay : true;
+var safetyDelay = _waiDefaults.safetyDelay !== undefined ? _waiDefaults.safetyDelay : 0;
 var contactWhitelistRules = {};
 
 var isInitializing = true;
@@ -96,7 +97,10 @@ wsHook.before = function (originalData, url)
         {
             isInitializing = false;
             console.log("WhatsIncognito: Interception is working.");
-            document.dispatchEvent(new CustomEvent('onInterceptionWorking', { detail: JSON.stringify({isInterceptionWorking: true}) }));
+            if (typeof WAIPageBus !== 'undefined' && WAIPageBus.emit)
+                WAIPageBus.emit('onInterceptionWorking', { isInterceptionWorking: true });
+            else
+                document.dispatchEvent(new CustomEvent('onInterceptionWorking', { detail: JSON.stringify({isInterceptionWorking: true}) }));
         }
 
         return packedNode;
@@ -235,9 +239,16 @@ function onDeletionMessageBlocked(message, remoteJid, messageId, deletedMessageI
                 if (bubbleElement) bubbleElement.setAttribute("deleted-message", "true");     // mark the message in red
             }
 
-            document.dispatchEvent(new CustomEvent("pseudoMsgs", {
-                detail: deletedMessageId
-            }));
+            if (typeof WAIPageBus !== 'undefined' && WAIPageBus.sendToHost)
+            {
+                WAIPageBus.sendToHost('deletedMsg:pseudoAdded', { id: deletedMessageId });
+            }
+            else
+            {
+                document.dispatchEvent(new CustomEvent("pseudoMsgs", {
+                    detail: deletedMessageId
+                }));
+            }
 
             // Now, save the deleted message in the DB after a short wait
             var waitTime = window.WhatsAppAPI != undefined ? 100 : 5000;
@@ -549,8 +560,52 @@ function exposeWhatsAppAPI()
     }
 }
 
+function applyOptionsToInterceptionGlobals(options)
+{
+    if (!options || typeof options !== 'object') return;
+    if ('readConfirmationsHook' in options) readConfirmationsHookEnabled = options.readConfirmationsHook;
+    if ('onlineUpdatesHook' in options) onlineUpdatesHookEnabled = options.onlineUpdatesHook;
+    if ('typingUpdatesHook' in options) typingUpdatesHookEnabled = options.typingUpdatesHook;
+    if ('safetyDelay' in options) safetyDelay = options.safetyDelay;
+    if ('saveDeletedMsgs' in options) saveDeletedMsgsHookEnabled = options.saveDeletedMsgs;
+    if ('showDeviceTypes' in options) showDeviceTypesEnabled = options.showDeviceTypes;
+    if ('autoReceiptOnReplay' in options) autoReceiptOnReplay = options.autoReceiptOnReplay;
+    if ('stealthVoiceNotes' in options) stealthVoiceNotesEnabled = options.stealthVoiceNotes;
+    if ('mediaAutoDownloadGuard' in options) mediaAutoDownloadGuardEnabled = options.mediaAutoDownloadGuard;
+    if ('contactWhitelistRules' in options && options.contactWhitelistRules && typeof options.contactWhitelistRules === 'object')
+        contactWhitelistRules = options.contactWhitelistRules;
+}
+
+function subscribeToInterceptionOptions()
+{
+    document.addEventListener('onOptionsUpdate', function (e)
+    {
+        try
+        {
+            var options = typeof e.detail === 'string' ? JSON.parse(e.detail) : e.detail;
+            applyOptionsToInterceptionGlobals(options);
+        }
+        catch (err) {}
+    });
+
+    document.addEventListener('onContactWhitelistUpdate', function (e)
+    {
+        try
+        {
+            var rules = typeof e.detail === 'string' ? JSON.parse(e.detail) : e.detail;
+            if (rules && typeof rules === 'object') contactWhitelistRules = rules;
+        }
+        catch (err) {}
+    });
+}
+
 function initialize()
 {
+    if (typeof window !== 'undefined' && window.__WAI__ && typeof window.__WAI__.getPrefs === 'function')
+    {
+        applyOptionsToInterceptionGlobals(window.__WAI__.getPrefs());
+    }
+    subscribeToInterceptionOptions();
     if (WALogs)
         hookLogs();
     initializeDeletedMessagesDB();

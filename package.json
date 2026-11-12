@@ -2,7 +2,7 @@
   "name": "waincognito",
   "productName": "WAIncognito",
   "desktopName": "waincognito",
-  "version": "2.6.85",
+  "version": "2.6.86",
   "description": "Be invisible on WhatsApp Web by disabling read receipts and presence updates",
   "license": "GPL-3.0",
   "private": true,
@@ -49,6 +49,7 @@
       "buildResources": "app/packaging"
     },
     "files": [
+      "shared/**/*",
       "app/electron/**/*",
       "app/.build/**/*",
       "images/icon_128_blue.png",

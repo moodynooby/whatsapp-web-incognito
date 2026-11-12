@@ -5,6 +5,8 @@
  * Manages per-JID rules (always / never / default) for WhatsApp Web Incognito.
  */
 
+const { normalizeJid } = require('../../shared/jid_utils.js');
+
 const Rule = Object.freeze({
   ALWAYS: 'always',
   NEVER: 'never',
@@ -12,30 +14,6 @@ const Rule = Object.freeze({
 });
 
 const VALID_RULES = new Set([Rule.ALWAYS, Rule.NEVER, Rule.DEFAULT]);
-
-/**
- * Normalizes WhatsApp JID across device suffixes and domain variants.
- * e.g. "123456789:1@s.whatsapp.net" -> "123456789@c.us"
- *
- * @param {string} [jid]
- * @returns {string}
- */
-function normalizeJid(jid) {
-  if (!jid || typeof jid !== 'string') return '';
-  const trimmed = jid.trim();
-  const atIndex = trimmed.indexOf('@');
-  let prefix = atIndex !== -1 ? trimmed.substring(0, atIndex) : trimmed;
-  let suffix = atIndex !== -1 ? trimmed.substring(atIndex + 1).toLowerCase() : 'c.us';
-
-  if (suffix === 's.whatsapp.net') suffix = 'c.us';
-
-  const colonIndex = prefix.indexOf(':');
-  if (colonIndex !== -1) {
-    prefix = prefix.substring(0, colonIndex);
-  }
-
-  return `${prefix}@${suffix}`;
-}
 
 /**
  * @param {string} rule

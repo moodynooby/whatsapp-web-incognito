@@ -1,46 +1,40 @@
 // Page-world shim. Injected by app/electron/preload.js BEFORE any upstream file.
 //
-// Purpose: let core/ and lib/ run with ZERO API shims beyond the two functions they
-// actually use (verified by exhaustive grep of core/ and lib/):
+// Purpose: let core/ and shared/ run with a tiny runtime API shim covering:
+//   - chrome.runtime.getURL(path)            inlined data: URIs (C4 CSP-safe)
+//   - browser.runtime.sendMessage({name:...}) synchronous prefs, whitelist, notes, export
 //
-//   chrome.runtime.getURL(path)            4 call sites, all images/*.svg
-//   browser.runtime.sendMessage({name:...}) 15 call sites, only getOptions/setOptions
-//
-// Everything else they touch (indexedDB, localStorage, fetch, DOM) is native here.
-//
-// THREE ORDERING FACTS make this work, all verified against the code:
-//
-//  1. ui.js:12 does `if (chrome != undefined) { var browser = chrome; }`. So `chrome`
-//     must exist before ui.js evaluates, or ui.js throws on `browser.runtime`.
-//  2. C4: WhatsApp serves a strict CSP. A <script src>, <link>, or fetch() to any
-//     scheme the shell owns is refused. So images are inlined as data: URIs and
-//     stylesheets are injected as an inline <style> (style-src allows 'unsafe-inline').
-//  3. getOptions must answer SYNCHRONOUSLY. ui.js:23 passes a callback but reads the
-//     result immediately after; a round-trip to the main process would race it. So
-//     prefs are baked in as a literal at build time and kept in a local object.
+// THREE ORDERING FACTS make this work:
+//  1. ui.js checks `chrome` -> `browser` before executing.
+//  2. C4: WhatsApp serves a strict CSP, so images are data: URIs and styles are inline.
+//  3. getOptions answers SYNCHRONOUSLY from BOOTSTRAP (or build-time defaults fallback)
+//     and stays live-synced via preload pushes.
 //
 // This file is a build input, not a build output. scripts/build.mjs substitutes the
 // four build-time literals marked below (assets, prefs, version, bundle order) and then
-// the preload evaluates the result via webFrame.executeJavaScript, which is CSP-exempt.
+// the preload evaluates window.__WAI_BOOTSTRAP__ and the result via webFrame.executeJavaScript.
 //
 // Do not spell a placeholder token literally anywhere else in this file, including in
-// comments: the substitution is a first-occurrence replace, so a token in prose would be
-// consumed before the real one in code and the build would emit a broken shim. The
-// build asserts that no token survives, so a mistake here fails loudly.
+// comments: the substitution is a first-occurrence replace.
 (function () {
   'use strict';
 
   var ASSETS = __WAI_ASSETS__;        // { "images/phone.svg": "data:image/svg+xml;base64,..." }
-  var PREFS = __WAI_PREFS__;          // defaults, deep-copied and mutable
+  var BUILD_DEFAULTS = __WAI_PREFS__; // shared defaults from shared/settings_schema.js
   var VERSION = __WAI_VERSION__;
   var ORDER = __WAI_ORDER__;          // { critical: [...], rest: [...], ui: [...], deferred: [...] }
 
   var host = window.__WAI_IPC__ || null;   // contextBridge handle, may be absent
   var loaded = { critical: false, rest: false, ui: false, deferred: false };
 
+  var BOOT = (window.__WAI_BOOTSTRAP__ && typeof window.__WAI_BOOTSTRAP__ === 'object')
+    ? window.__WAI_BOOTSTRAP__
+    : null;
+  var PREFS = Object.assign({}, BUILD_DEFAULTS);
+  var WHITELIST = Object.assign({}, (BOOT && BOOT.whitelist && typeof BOOT.whitelist === 'object') ? BOOT.whitelist : {});
+  var NOTES = Object.assign({}, (BOOT && BOOT.notes && typeof BOOT.notes === 'object') ? BOOT.notes : {});
+
   // ---------------------------------------------------------------- failure banner
-  // A dead hook must never be able to look like a working one. Everything that can
-  // fail visibly calls this.
   var banner = null;
   function reportFailure(reason, detail) {
     try {
@@ -66,9 +60,6 @@
   }
 
   // ---------------------------------------------------------------- liveness
-  // Read by app/electron/watchdog.js on a MAIN-PROCESS timer. A page-side interval is
-  // exactly what we cannot trust here, because a throttled or suspended page timer is
-  // the failure mode we are defending against.
   var gen = 0;
   var framesIn = 0, framesOut = 0, lastFrameAt = 0;
   var state = {
@@ -88,32 +79,80 @@
     error: null
   };
 
+  function normalizeJid(jid) {
+    if (typeof window.WAIJidUtils === 'object' && window.WAIJidUtils &&
+        typeof window.WAIJidUtils.normalizeJid === 'function') {
+      return window.WAIJidUtils.normalizeJid(jid);
+    }
+    if (!jid || typeof jid !== 'string') return '';
+    var trimmed = jid.trim();
+    if (!trimmed) return '';
+    var atIndex = trimmed.indexOf('@');
+    var prefix = atIndex !== -1 ? trimmed.substring(0, atIndex) : trimmed;
+    var suffix = atIndex !== -1 ? trimmed.substring(atIndex + 1).toLowerCase() : 'c.us';
+    if (suffix === 's.whatsapp.net') suffix = 'c.us';
+    var colonIndex = prefix.indexOf(':');
+    if (colonIndex !== -1) prefix = prefix.substring(0, colonIndex);
+    return prefix ? (prefix + '@' + suffix) : '';
+  }
+
+  function coercePrefValue(k, v) {
+    if (!Object.prototype.hasOwnProperty.call(BUILD_DEFAULTS, k)) return undefined;
+    if (typeof window.WAISettingsSchema === 'object' && window.WAISettingsSchema &&
+        typeof window.WAISettingsSchema.coerceSetting === 'function') {
+      return window.WAISettingsSchema.coerceSetting(k, v, PREFS[k]);
+    }
+    var def = BUILD_DEFAULTS[k];
+    if (k === 'safetyDelay') {
+      var sd = parseInt(v, 10);
+      if (isNaN(sd)) return undefined;
+      if (sd < 0 || sd > 30) return PREFS.safetyDelay;
+      return sd;
+    }
+    if (k === 'privacyScreenLockIdleMinutes') {
+      var mins = parseInt(v, 10);
+      if (isNaN(mins)) return undefined;
+      if (mins < 1 || mins > 60) return PREFS.privacyScreenLockIdleMinutes;
+      return mins;
+    }
+    if (k === 'privacyScreenLockPIN') {
+      if (typeof v !== 'string') return undefined;
+      var trimmed = v.trim();
+      if (trimmed === '') return '';
+      return /^[a-f0-9]{64}$/i.test(trimmed) ? trimmed.toLowerCase() : undefined;
+    }
+    if (typeof def === 'boolean') {
+      if (typeof v === 'boolean') return v;
+      if (v === 'true') return true;
+      if (v === 'false') return false;
+      return undefined;
+    }
+    if (typeof def === 'number') {
+      var n = parseInt(v, 10);
+      return isNaN(n) ? undefined : n;
+    }
+    if (typeof def === 'string') {
+      return typeof v === 'string' ? v : undefined;
+    }
+    return v;
+  }
+
   function prefsHash() {
-    // Stable hash so the shell can detect a lost prefs write without shipping values.
-    var s = Object.keys(PREFS).sort().map(function (k) { return k + '=' + PREFS[k]; }).join('|');
+    var s = Object.keys(PREFS).sort().map(function (k) { return k + '=' + String(PREFS[k]); }).join('|');
     var h = 0;
     for (var i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; }
     return h;
   }
+
+  if (BOOT && BOOT.prefs && typeof BOOT.prefs === 'object') {
+    for (var bk in BOOT.prefs) {
+      if (!Object.prototype.hasOwnProperty.call(BOOT.prefs, bk)) continue;
+      var bv = coercePrefValue(bk, BOOT.prefs[bk]);
+      if (bv !== undefined) PREFS[bk] = bv;
+    }
+  }
   state.prefsEcho = prefsHash();
 
-  // Socket liveness. This has to CAPTURE the instance, not wait to be asked about it.
-  //
-  // The previous version patched a `readyState` getter onto the native prototype, which
-  // only ever recorded anything if some code happened to READ `readyState` off a live
-  // socket. Nothing in the shell does — ws_hook builds the instance inside its wrapper and
-  // never hands a reference out — so the getter never fired, `socketState` sat at its
-  // initial -1, and after 90s the watchdog reported 'no socket observed' forever. That
-  // surfaced as a permanent "receipts are NOT blocked right now" in the tray while the
-  // hook was in fact blocking them (852 frames / 49 receipts in the same menu), and it
-  // simultaneously blinded the genuine `socketState === 3` disconnect check, since that
-  // compares against the same value that was pinned at -1.
-  //
-  // So wrap the constructor ws_hook is currently exposing and record what it hands back.
-  // arm() runs as the last step of the document-start sequence, before WhatsApp opens its
-  // first socket, so this is in place in time. `.prototype` is copied across and the
-  // returned object is the real native socket, so `instanceof`, `send`, and everything
-  // WhatsApp does with the result behave exactly as before.
   var socket = null;               // last instance ws_hook handed out
   function bindSocket() {
     try {
@@ -123,19 +162,6 @@
       if (typeof Current !== 'function') return;
 
       var Tracked = function (url, protocols) {
-        // Delegate to the constructor that is installed RIGHT NOW, not to the native one.
-        // That is the whole fix: ws_hook installs interception by replacing the global
-        // with a wrapper that builds the socket and then attaches the send/message hooks
-        // (ws_hook.js). Constructing `new Native(...)` here skipped that wrapper, so no
-        // frame was ever hooked, `isInitializing` never flipped, and the UI raised its
-        // "interception is not working" dialog — with the hooks installed but never
-        // reached. Calling through to `Current` keeps interception on the path and still
-        // hands us the instance to watch.
-        //
-        // Reflect.construct rather than `new Current(...)`: it invokes the constructor
-        // properly while letting us forward a genuine one-element argument list, so the
-        // one-arg form WhatsApp and ws_hook both use is not widened to two args with an
-        // explicit undefined.
         var args = (protocols === undefined) ? [url] : [url, protocols];
         var s = Reflect.construct(Current, args);
         socket = s;
@@ -147,8 +173,6 @@
     } catch (e) { /* non-fatal: we just lose socket reporting */ }
   }
 
-  // Read readyState off the captured instance. Cheap, and only ever called when a socket
-  // is actually built or when the frames flowing through the hook say liveness moved.
   function readSocket() {
     try {
       if (!socket) return;
@@ -160,7 +184,6 @@
     } catch (e) { /* ignore */ }
   }
 
-  // Called by the preload once the main bundle has been evaluated.
   function arm() {
     gen++;
     state.generation = gen;
@@ -190,87 +213,142 @@
   function getURL(path) {
     var p = String(path == null ? '' : path).replace(/^\/+/, '');
     if (Object.prototype.hasOwnProperty.call(ASSETS, p)) return ASSETS[p];
-    // Unknown asset: a transparent 1x1 beats a CSP-rejected request that silently
-    // leaves a broken icon in the menu.
     return 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  }
+
+  function notifyEvent(name, payload) {
+    try {
+      document.dispatchEvent(new CustomEvent(name, { detail: JSON.stringify(payload) }));
+    } catch (e) {
+      if (host && host.reportFailure) {
+        try { host.reportFailure(name, String((e && e.message) || e)); } catch (e2) {}
+      }
+    }
+  }
+
+  function notifyOptionsUpdate(options) {
+    notifyEvent('onOptionsUpdate', options);
+  }
+
+  function applyPrefs(patch, fromPage) {
+    if (!patch || typeof patch !== 'object') return {};
+    var applied = {};
+    for (var k in patch) {
+      if (!Object.prototype.hasOwnProperty.call(patch, k)) continue;
+      if (!Object.prototype.hasOwnProperty.call(BUILD_DEFAULTS, k)) continue;
+      var v = coercePrefValue(k, patch[k]);
+      if (v === undefined) continue;
+      PREFS[k] = v;
+      applied[k] = v;
+    }
+    state.prefsEcho = prefsHash();
+    if (!fromPage && Object.keys(applied).length > 0) notifyOptionsUpdate(applied);
+    return applied;
   }
 
   function handleMessage(msg, respond) {
     msg = msg || {};
     try {
       if (msg.name === 'getOptions') {
-        // Synchronous by design (see header note 3). background.js "ratifies" this by
-        // immediately sending it back as setOptions, so mirror that harmlessly.
-        respond(PREFS);
-        return;
+        respond(Object.assign({}, PREFS));
+        return false;
       }
       if (msg.name === 'setOptions') {
         var patch = {};
-        for (var k in msg) { if (k !== 'name' && Object.prototype.hasOwnProperty.call(msg, k)) patch[k] = msg[k]; }
-        // fromPage: core/ui.js dispatches onOptionsUpdate itself right after every tick
-        // handler, so dispatching again here would run each listener twice per click.
-        applyPrefs(patch, true);
-        if (host && host.setPrefs) { try { host.setPrefs(patch); } catch (e) {} }
-        respond(PREFS);
-        return;
+        for (var k in msg) {
+          if (k !== 'name' && Object.prototype.hasOwnProperty.call(msg, k)) patch[k] = msg[k];
+        }
+        var applied = applyPrefs(patch, true);
+        if (host && host.setPrefs) { try { host.setPrefs(applied); } catch (e) {} }
+        respond(Object.assign({}, PREFS));
+        return false;
       }
-    } catch (e) { /* fall through to the empty response below */ }
+      if (msg.name === 'resetOptions') {
+        applyPrefs(Object.assign({}, BUILD_DEFAULTS), true);
+        if (host && host.resetPrefs) { try { host.resetPrefs(); } catch (e) {} }
+        respond(Object.assign({}, PREFS));
+        return false;
+      }
+      if (msg.name === 'getInitialState') {
+        respond({
+          options: Object.assign({}, PREFS),
+          contactWhitelistRules: Object.assign({}, WHITELIST),
+          ephemeralNotes: Object.assign({}, NOTES),
+        });
+        return false;
+      }
+      if (msg.name === 'getContactWhitelist') {
+        respond(Object.assign({}, WHITELIST));
+        return false;
+      }
+      if (msg.name === 'setContactWhitelistRule') {
+        var jid = normalizeJid(msg.jid);
+        var rule = msg.rule;
+        if (jid && (rule === 'always' || rule === 'never' || rule === 'default')) {
+          if (rule === 'default') delete WHITELIST[jid];
+          else WHITELIST[jid] = rule;
+          if (host && host.setWhitelistRule) {
+            try { host.setWhitelistRule({ jid: jid, rule: rule }); } catch (e) {}
+          }
+        }
+        respond(Object.assign({}, WHITELIST));
+        return false;
+      }
+      if (msg.name === 'getEphemeralNotes') {
+        respond(Object.assign({}, NOTES));
+        return false;
+      }
+      if (msg.name === 'setEphemeralNote') {
+        var noteJid = normalizeJid(msg.jid);
+        if (noteJid) {
+          var val = msg.note;
+          if (val === null || val === undefined || val === '') delete NOTES[noteJid];
+          else NOTES[noteJid] = String(val);
+          if (host && host.setNote) {
+            try { host.setNote({ jid: noteJid, note: val }); } catch (e) {}
+          }
+        }
+        respond(Object.assign({}, NOTES));
+        return false;
+      }
+      if (msg.name === 'deleteEphemeralNote') {
+        var delJid = normalizeJid(msg.jid);
+        if (delJid) {
+          delete NOTES[delJid];
+          if (host && host.deleteNote) {
+            try { host.deleteNote({ jid: delJid }); } catch (e) {}
+          }
+        }
+        respond(Object.assign({}, NOTES));
+        return false;
+      }
+      if (msg.name === 'clearEphemeralNotes') {
+        NOTES = {};
+        if (host && host.clearNotes) {
+          try { host.clearNotes(); } catch (e) {}
+        }
+        respond({});
+        return false;
+      }
+      if (msg.name === 'exportEphemeralChat') {
+        if (host && typeof host.exportEphemeralChat === 'function') {
+          var res = host.exportEphemeralChat(msg);
+          if (res && typeof res.then === 'function') {
+            res.then(
+              function (out) { respond(out || { ok: true }); },
+              function (err) { respond({ ok: false, error: String((err && err.message) || err) }); }
+            );
+            return true;
+          }
+          respond(res || { ok: false, unsupported: true });
+          return false;
+        }
+        respond({ ok: false, unsupported: true });
+        return false;
+      }
+    } catch (e) { /* fall through to empty response below */ }
     respond({});
-  }
-
-  /**
-   * Mutate PREFS and, unless the change came from the page itself, tell the page.
-   *
-   * Why the event matters as much as the assignment: the globals that decide whether a
-   * receipt is actually blocked — readConfirmationsHookEnabled, saveDeletedMsgsHookEnabled,
-   * showDeviceTypesEnabled, autoReceiptOnReplay (core/interception.js) and
-   * allowStatusDownload (core/status_download.js) — are read by core/node_handler.js on
-   * every decoded stanza, and the ONLY thing that ever mutates them is core/injected_ui.js's
-   * `onOptionsUpdate` listener. So a pref pushed from the tray or the native settings menu
-   * used to update PREFS and nothing else: it was written to prefs.json and ignored by the
-   * page until the next document load. A checkbox that lies about the one thing the app
-   * exists to do is the worst outcome in this project, so the push dispatches.
-   *
-   * A push that lands before the ui bundle is injected is not lost: core/ui.js reads
-   * getOptions at document_idle and dispatches the full set itself, so the listener sees
-   * the new values on the same load.
-   *
-   * @param {object} patch
-   * @param {boolean} [fromPage]  true when this round-trip originated in core/ui.js
-   */
-  function applyPrefs(patch, fromPage) {
-    var applied = {};
-    for (var k in patch) {
-      if (!Object.prototype.hasOwnProperty.call(PREFS, k)) continue;   // reject unknown keys
-      var v = patch[k];
-      if (k === 'safetyDelay') {
-        v = parseInt(v, 10);
-        if (isNaN(v) || v < 0 || v > 30) v = PREFS.safetyDelay;          // ui.js:1119 allows 0-30
-      } else if (typeof PREFS[k] === 'boolean') {
-        v = !!v;
-      }
-      PREFS[k] = v;
-      applied[k] = v;
-    }
-    state.prefsEcho = prefsHash();
-    if (!fromPage) notifyOptionsUpdate(applied);
-  }
-
-  /**
-   * Dispatch the same event and payload shape core/ui.js produces, so the existing
-   * enforcement listeners need no change and no second convention exists.
-   *
-   * A listener that throws surfaces as an uncaught page error and is reported by the
-   * preload's diagnostics hook, which is correct rather than noisy: a listener that cannot
-   * apply a pref is a protection failure, and this project would rather say so loudly than
-   * let a broken enforcement path look healthy.
-   */
-  function notifyOptionsUpdate(options) {
-    try {
-      document.dispatchEvent(new CustomEvent('onOptionsUpdate', { detail: JSON.stringify(options) }));
-    } catch (e) {
-      if (host && host.reportFailure) { try { host.reportFailure('options update', String((e && e.message) || e)); } catch (e2) {} }
-    }
+    return false;
   }
 
   var runtime = {
@@ -279,22 +357,20 @@
       if (typeof msg === 'function') { cb = msg; msg = {}; }
       if (typeof cb !== 'function') cb = null;
       var responded = false;
+      var isAsync = false;
       var respond = function (v) { if (responded) return; responded = true; if (cb) cb(v); };
-      try { handleMessage(msg, respond); }
+      try { isAsync = handleMessage(msg, respond) === true; }
       catch (e) { respond({}); }
-      if (!responded) respond({});
+      if (!isAsync && !responded) respond({});
     },
-    // Present so feature-detecting code does not explode. Not used by core/.
     getManifest: function () { return { version: VERSION }; },
     id: 'waincognito-electron'
   };
 
-  // `chrome` can pre-exist in some builds; merge rather than clobber.
   window.chrome = Object.assign(window.chrome || {}, { runtime: runtime });
   window.browser = Object.assign(window.browser || {}, { runtime: runtime });
 
   // ---------------------------------------------------------------- host surface
-  // The preload and the main process talk to the page exclusively through this.
   window.__WAI__ = {
     version: VERSION,
     order: ORDER,
@@ -309,24 +385,28 @@
     },
     arm: arm,
     markLoaded: function (which) { loaded[which] = true; },
-    // Used by preload for the phase machine: page asks, host answers.
     isUiReady: function () { return document.readyState !== 'loading'; },
     getPrefs: function () { return Object.assign({}, PREFS); },
-    // Not a bare `applyPrefs` reference: this is the HOST path (preload's wai:prefs push,
-    // and the fallback right after the shim evaluates), so it must dispatch the update
-    // event. fromPage is deliberately left unset.
     setPrefs: function (patch) { applyPrefs(patch); },
+    getWhitelist: function () { return Object.assign({}, WHITELIST); },
+    setWhitelist: function (rules) {
+      if (!rules || typeof rules !== 'object') return;
+      WHITELIST = Object.assign({}, rules);
+      notifyEvent('onContactWhitelistUpdate', WHITELIST);
+    },
+    getNotes: function () { return Object.assign({}, NOTES); },
+    setNotes: function (notes) {
+      if (!notes || typeof notes !== 'object') return;
+      NOTES = Object.assign({}, notes);
+      notifyEvent('onEphemeralNotesUpdate', NOTES);
+    },
     reportFailure: reportFailure,
     clearFailure: clearFailure,
-    /**
-     * Open the page's own options panel, for when the shell has no native menu to offer.
-     * core/ui.js answers synchronously through window.__WAI_PANEL_OPEN_RESULT__, so this
-     * returns whether the panel actually opened rather than whether the event was sent.
-     */
-    openOptions: function () {
+    openOptions: function (opts) {
       try {
         window.__WAI_PANEL_OPEN_RESULT__ = false;
-        document.dispatchEvent(new CustomEvent('onOpenIncognitoOptions'));
+        var init = (opts && typeof opts === 'object') ? { detail: JSON.stringify(opts) } : undefined;
+        document.dispatchEvent(new CustomEvent('onOpenIncognitoOptions', init));
         return window.__WAI_PANEL_OPEN_RESULT__ === true;
       } catch (e) {
         return false;
@@ -334,9 +414,6 @@
     }
   };
 
-  // Announce. The preload resolves its injection barrier on this, which is what lets it
-  // prove the document_start payload really executed in the page world before any of
-  // WhatsApp's own code (C1) rather than assuming it.
   if (host && host.booted) {
     try { host.booted({ href: location.href, userAgent: navigator.userAgent, version: VERSION }); } catch (e) {}
   }

@@ -19,6 +19,7 @@ const path = require('node:path');
 
 const { SETTINGS, settingsFor, quickToggles, numericRanges, buildSettingsTemplate, choiceLabel } =
   require('./settings-menu.js');
+const WAISettingsSchema = require('../../shared/settings_schema.js');
 const meta = require('../.build/meta.json');
 
 // ---------------------------------------------------------------- fixtures
@@ -59,12 +60,13 @@ test('every persisted key has a row, so no setting is unreachable', () => {
   assert.deepStrictEqual(extra, [], `rows for unknown keys: ${extra.join(', ')}`);
 });
 
-test('the table states no defaults, so background.js stays the only source', () => {
-  // A `default:` here would be a second source of truth nothing keeps in sync, which is
-  // exactly the failure docs/ARCHITECTURE.md §1 rules out for the app and the extension
-  // disagreeing about what a default is. Cheap to check, expensive to discover later.
+test('the schema table is the single source of defaults, labels, groups, and types', () => {
+  const schemaDefaults = WAISettingsSchema.defaults('all');
+  assert.strictEqual(SETTINGS.length, 15);
   for (const spec of SETTINGS) {
-    assert.ok(!('default' in spec), `${spec.key} restates a default`);
+    assert.ok('default' in spec, `${spec.key} has no default`);
+    assert.strictEqual(spec.default, schemaDefaults[spec.key], `${spec.key} default mismatch`);
+    assert.ok(['boolean', 'integer', 'secret-hash'].includes(spec.type), `${spec.key} invalid type ${spec.type}`);
     assert.ok(typeof spec.label === 'string' && spec.label.length > 0, `${spec.key} has no label`);
     assert.ok(typeof spec.group === 'string' && spec.group.length > 0, `${spec.key} has no group`);
   }
@@ -94,9 +96,11 @@ test('settingsFor hides a key the store does not know, rather than showing a dea
   assert.deepStrictEqual(settingsFor('nonsense'), []);
 });
 
-test('numericRanges derives the validation bound from the values the menu offers', () => {
-  // One declaration: if the radio submenu ever offers 60, the store starts accepting 60.
-  assert.deepStrictEqual(numericRanges(), { safetyDelay: { min: 0, max: 30 } });
+test('numericRanges derives validation bounds from the schema choices/min/max', () => {
+  assert.deepStrictEqual(numericRanges(), {
+    privacyScreenLockIdleMinutes: { min: 1, max: 60 },
+    safetyDelay: { min: 0, max: 30 },
+  });
 });
 
 // ---------------------------------------------------------------- rendering
@@ -128,9 +132,52 @@ test('a stored delay the menu does not offer still loads, and claims nothing', (
   assert.deepStrictEqual(row.submenu.filter((c) => c.checked), []);
 });
 
-test('choiceLabel renders zero as off, because that is what it means', () => {
+test('choiceLabel renders zero as off and respects unit', () => {
   assert.strictEqual(choiceLabel(0), 'Off');
   assert.strictEqual(choiceLabel(10), '10 seconds');
+  assert.strictEqual(choiceLabel(1, { unit: 'minutes' }), '1 minute');
+  assert.strictEqual(choiceLabel(5, { unit: 'minutes' }), '5 minutes');
+});
+
+test('privacyScreenLockIdleMinutes renders as a radio submenu in minutes', () => {
+  const applied = [];
+  const items = buildSettingsTemplate({
+    prefs: realPrefs({ privacyScreenLockIdleMinutes: 10 }),
+    apply: (patch) => applied.push(patch),
+  });
+  const row = rows(items)['Privacy Screen Lock Idle Minutes'];
+  assert.deepStrictEqual(row.submenu.map((c) => c.label),
+    ['1 minute', '5 minutes', '10 minutes', '15 minutes', '30 minutes', '60 minutes']);
+  assert.deepStrictEqual(row.submenu.filter((c) => c.checked).map((c) => c.label), ['10 minutes']);
+  row.submenu.find((c) => c.label === '30 minutes').click();
+  assert.deepStrictEqual(applied, [{ privacyScreenLockIdleMinutes: 30 }]);
+});
+
+test('privacyScreenLockPIN renders native actions for setting and clearing the PIN', () => {
+  const applied = [];
+  let pinPrompts = 0;
+
+  const emptyPinItems = buildSettingsTemplate({
+    prefs: realPrefs({ privacyScreenLockPIN: '' }),
+    apply: (patch) => applied.push(patch),
+    openPinPrompt: () => { pinPrompts += 1; },
+  });
+  const emptyRow = rows(emptyPinItems)['Privacy Screen Lock PIN'];
+  assert.strictEqual(emptyRow.submenu[0].label, 'Set / Change Privacy PIN…');
+  assert.strictEqual(emptyRow.submenu[1].label, 'Clear Privacy PIN');
+  assert.strictEqual(emptyRow.submenu[1].enabled, false);
+  emptyRow.submenu[0].click();
+  assert.strictEqual(pinPrompts, 1);
+
+  const hash = '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4';
+  const setPinItems = buildSettingsTemplate({
+    prefs: realPrefs({ privacyScreenLockPIN: hash }),
+    apply: (patch) => applied.push(patch),
+  });
+  const setRow = rows(setPinItems)['Privacy Screen Lock PIN'];
+  assert.strictEqual(setRow.submenu[1].enabled, true);
+  setRow.submenu[1].click();
+  assert.deepStrictEqual(applied, [{ privacyScreenLockPIN: '' }]);
 });
 
 test('the status header comes first and is not clickable', () => {
@@ -149,7 +196,7 @@ test('a missing or empty header does not leave a leading separator', () => {
   }
 });
 
-test('all ten settings render for a real prefs object', () => {
+test('all fifteen settings render for a real prefs object', () => {
   const items = buildSettingsTemplate({ prefs: realPrefs(), header: HEADER });
   const labels = new Set(items.map((i) => i.label));
   for (const spec of SETTINGS) {

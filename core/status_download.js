@@ -128,33 +128,33 @@ function checkNodeAndChildrenForSRC(node, functionToCall)
     }
 }
 
-// create a mutation observer that looks for any img or video tags being added to the page, any of their src attributes changing, or any of them being removed
-var observer = new MutationObserver(function (mutations) 
+// Subscribe to shared body MutationObserver (WAIPageBus.DOMObserver) for img/video status changes
+function onStatusMutations(mutations)
 {
     if (!allowStatusDownload) return;
 
-    mutations.forEach(function (mutation) 
+    mutations.forEach(function (mutation)
     {
-        if (mutation.type == "childList") 
+        if (mutation.type == "childList")
         {
             // if a child is added, loop through the added nodes
-            for (var i = 0; i < mutation.addedNodes.length; i++) 
+            for (var i = 0; i < mutation.addedNodes.length; i++)
             {
                 checkNodeAndChildrenForSRC(mutation.addedNodes[i], handleSRCAdd);
             }
             // if a child is removed, loop through the removed nodes
-            for(var i = 0; i < mutation.removedNodes.length; i++)
+            for (var i = 0; i < mutation.removedNodes.length; i++)
             {
                 checkNodeAndChildrenForSRC(mutation.removedNodes[i], handleSRCRemove);
             }
-        } 
-        else if (mutation.type == "attributes") 
+        }
+        else if (mutation.type == "attributes")
         {
             // if an attribute is changed, and it's the src attribute
-            if (mutation.attributeName == "src") 
+            if (mutation.attributeName == "src")
             {
                 // check that the oldValue is different from the new value
-                if (mutation.oldValue == mutation.target.src) 
+                if (mutation.oldValue == mutation.target.src)
                 {
                     // if it's not, then the mutation is not a change in src
                     return;
@@ -166,21 +166,19 @@ var observer = new MutationObserver(function (mutations)
             }
         }
     });
-});
+}
 
-// start observing the body for changes
-observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['src'],
-    attributeOldValue: true,
-});
+if (typeof WAIPageBus !== "undefined" && WAIPageBus.DOMObserver)
+{
+    WAIPageBus.DOMObserver.subscribe(onStatusMutations);
+}
 
 document.addEventListener('onOptionsUpdate', function (e)
 {
-    // update enforcing globals
-    // TODO: move outside injected_ui.js
-    var options = JSON.parse(e.detail);
-    if ('allowStatusDownload' in options) allowStatusDownload = options.allowStatusDownload;
+    try
+    {
+        var options = typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail;
+        if (options && 'allowStatusDownload' in options) allowStatusDownload = options.allowStatusDownload;
+    }
+    catch (err) {}
 });

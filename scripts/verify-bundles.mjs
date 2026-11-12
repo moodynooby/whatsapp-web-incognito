@@ -14,7 +14,11 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import vm from 'node:vm';
-import { MAIN_CRITICAL, MAIN_REST, DEFERRED, UI, CSS, IMAGE_ASSETS } from './bundle-defs.mjs';
+import { createRequire } from 'node:module';
+import { MAIN_CRITICAL, MAIN_REST, DEFERRED, UI, CSS, IMAGE_ASSETS, DESKTOP_UA } from './bundle-defs.mjs';
+
+const require = createRequire(import.meta.url);
+const WAISettingsSchema = require('../shared/settings_schema.js');
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = join(ROOT, 'dist');
@@ -27,6 +31,17 @@ const results = [];
 function check(id, desc, fn) {
   try {
     const r = fn();
+    if (r === true || r === undefined) { passes++; results.push(['PASS', id, desc]); }
+    else { failures++; results.push(['FAIL', id, `${desc} — ${r}`]); }
+  } catch (e) {
+    failures++;
+    results.push(['FAIL', id, `${desc} — threw: ${e.message}`]);
+  }
+}
+
+async function checkAsync(id, desc, fn) {
+  try {
+    const r = await fn();
     if (r === true || r === undefined) { passes++; results.push(['PASS', id, desc]); }
     else { failures++; results.push(['FAIL', id, `${desc} — ${r}`]); }
   } catch (e) {
@@ -322,7 +337,12 @@ check('A-umd', 'UMD vendor files publish their globals even when the page has an
   const CASES = [
     { bundle: 'main-rest.js', file: 'lib/pako.js', expect: ['pako'] },
     { bundle: 'main-rest.js', file: 'lib/pbf.3.0.5.min.js', expect: ['Pbf'] },
-    { bundle: 'ui.js', file: 'lib/drop.js', expect: ['Tether', 'Drop'] },
+    { bundle: 'main-rest.js', file: 'shared/jid_utils.js', expect: ['WAIJidUtils'] },
+    { bundle: 'main-rest.js', file: 'shared/ephemeral_utils.js', expect: ['WAIEphemeralUtils'] },
+    { bundle: 'main-rest.js', file: 'shared/settings_schema.js', expect: ['WAISettingsSchema'] },
+    { bundle: 'main-rest.js', file: 'shared/wai_page_bus.js', expect: ['WAIPageBus'] },
+    { bundle: 'ui.js', file: 'shared/settings_renderer.js', expect: ['WAISettingsRenderer'] },
+    { bundle: 'ui.js', file: 'shared/wai_page_bus.js', expect: ['WAIPageBus'] },
     { bundle: 'ui.js', file: 'lib/sweetalert.min.js', expect: ['swal'] },
   ];
   const GUARD_HEAD = 'var define=void 0, exports=void 0, module=void 0;';
@@ -430,28 +450,20 @@ check('A-shim', 'the page shim has no unsubstituted build placeholders', () => {
 // The expected count mirrors background.js's getOptions list (12 upstream + 2 fork
 // privacy-screen-lock keys added by the fork's stealth-chat-archiver feature); if a
 // new pref is added, update this count in the same commit or A-prefs fails.
-check('A-prefs', 'option defaults are derived from background.js and reach the shim', () => {
+check('A-prefs', 'option defaults come from shared/settings_schema.js and reach the shim & background', () => {
   if (!haveBuild) return 'no build output';
-  const src = readSrc(join(ROOT, 'background.js'));
-  const g = src.slice(src.indexOf('getOptions'));
-  const listMatch = g.match(/storage\.local\.get\(\s*\[([^\]]*)\]/);
-  if (!listMatch) return 'could not read the key list from background.js';
-  const keys = listMatch[1].split(',').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
-  const expected = {};
-  for (const k of keys) {
-    const m = g.match(new RegExp(`var\\s+${k}\\s*=\\s*(true|false|-?\\d+|"[^"]*")\\s*;`));
-    if (!m) return `background.js has no literal default for "${k}"`;
-    if (m[1] === 'true') expected[k] = true;
-    else if (m[1] === 'false') expected[k] = false;
-    else if (m[1].startsWith('"')) expected[k] = m[1].slice(1, -1);
-    else expected[k] = Number(m[1]);
+  const expected = WAISettingsSchema.defaults('shared');
+  const keys = Object.keys(expected);
+  if (keys.length !== 14) return `expected 14 shared option keys, schema yields ${keys.length}`;
+
+  const bg = readSrc(join(ROOT, 'background.js'));
+  if (!bg.includes('WAISettingsSchema') || !bg.includes('WAIJidUtils')) {
+    return 'background.js does not consume shared/settings_schema.js and shared/jid_utils.js';
   }
-  // 14 = 12 upstream keys + fork's privacyScreenLockPIN + privacyScreenLockIdleMinutes.
-  if (keys.length !== 14) return `expected 14 option keys, background.js yields ${keys.length}`;
 
   const meta = readJSON(join(EBUILD, 'meta.json'));
   if (JSON.stringify(meta.prefs) !== JSON.stringify(expected)) {
-    return `meta.json prefs disagree with background.js:\n      meta: ${JSON.stringify(meta.prefs)}\n      bg:   ${JSON.stringify(expected)}`;
+    return `meta.json prefs disagree with schema:\n      meta:   ${JSON.stringify(meta.prefs)}\n      schema: ${JSON.stringify(expected)}`;
   }
   const shim = readSrc(join(EBUILD, 'shim.js'));
   for (const [k, v] of Object.entries(expected)) {
@@ -563,19 +575,119 @@ check('A-liveprefs', 'a pref pushed from the host reaches the page as an options
 // rename there is silent in both builds — the checkbox appears to work and nothing is saved.
 // This is the cheapest independent guard for that cross-file contract: it fails when the key
 // name changes and survives an identifier-only refactor.
-check('A-panelkeys', 'every option key the extension panel uses is one background.js knows', () => {
-  const bg = readSrc(join(ROOT, 'background.js'));
-  const listMatch = bg.slice(bg.indexOf('getOptions')).match(/storage\.local\.get\(\s*\[([^\]]*)\]/);
-  if (!listMatch) return 'could not read the key list from background.js';
-  const known = new Set(listMatch[1].split(',').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean));
+check('A-panelkeys', 'every option key the settings UI uses is in shared/settings_schema.js', () => {
+  const known = new Set(WAISettingsSchema.allKeys('shared'));
 
-  const panel = readSrc(join(ROOT, 'core', 'ui.js'));
-  const written = [...panel.matchAll(/name:\s*["']setOptions["']\s*,\s*([A-Za-z0-9_]+)\s*:/g)].map((m) => m[1]);
-  const read = [...panel.matchAll(/options\.([A-Za-z0-9_]+)/g)].map((m) => m[1]);
-  if (!written.length) return 'found no setOptions keys in the panel — the pattern is stale';
+  const rendererSrc = readSrc(join(ROOT, 'shared', 'settings_renderer.js'));
+  if (!rendererSrc.includes('specsFor')) {
+    return 'shared/settings_renderer.js does not derive controls dynamically via WAISettingsSchema.specsFor';
+  }
+  const popupHtml = readSrc(join(ROOT, 'popup.html'));
+  for (const scriptRef of ['shared/settings_schema.js', 'shared/settings_renderer.js', 'popup.js']) {
+    if (!popupHtml.includes(scriptRef)) return `popup.html does not load ${scriptRef}`;
+  }
+  if (/<script(?![^>]*\bsrc=)[^>]*>[\s\S]*?\S/i.test(popupHtml)) {
+    return 'popup.html contains an inline <script> (forbidden by MV3 CSP)';
+  }
 
-  const unknown = [...new Set([...written, ...read])].filter((k) => !known.has(k));
-  return unknown.length ? `the panel uses keys background.js does not know: ${unknown.join(', ')}` : true;
+  const surfaceFiles = ['shared/settings_renderer.js', 'popup.js', 'core/ui.js'];
+  const bad = [];
+  for (const rel of surfaceFiles) {
+    const src = readSrc(join(ROOT, rel));
+    const written = [...src.matchAll(/name:\s*["']setOptions["']\s*,\s*([A-Za-z0-9_]+)\s*:/g)].map((m) => m[1]);
+    const read = [...src.matchAll(/\boptions\.([A-Za-z0-9_]+)/g)].map((m) => m[1]);
+    for (const k of [...written, ...read]) {
+      if (!known.has(k)) bad.push(`${rel}:${k}`);
+    }
+  }
+  return bad.length ? `settings surfaces reference keys not in WAISettingsSchema: ${bad.join(', ')}` : true;
+});
+
+// A-critical — both critical page hooks (WebSocket + Worker constructor timing fix) must reach critical.js.
+check('A-critical', 'app/.build/critical.js includes both ws_hook.js and comms_worker_fix.js', () => {
+  if (!haveBuild) return 'no build output';
+  if (!MAIN_CRITICAL.includes('core/ws_hook.js') || !MAIN_CRITICAL.includes('core/comms_worker_fix.js')) {
+    return `MAIN_CRITICAL missing expected entries: ${MAIN_CRITICAL.join(', ')}`;
+  }
+  const critical = readSrc(join(EBUILD, 'critical.js'));
+  const missing = [];
+  if (!critical.includes('/* ---- core/ws_hook.js ---- */')) missing.push('core/ws_hook.js');
+  if (!critical.includes('/* ---- core/comms_worker_fix.js ---- */')) missing.push('core/comms_worker_fix.js');
+  return missing.length ? `missing from app/.build/critical.js: ${missing.join(', ')}` : true;
+});
+
+// A-ua — DESKTOP_UA must stay synchronized across shared/bundle_manifest.js, rules.json, and Android MainActivity.kt.
+check('A-ua', 'DESKTOP_UA matches across bundle_manifest.js, rules.json, and MainActivity.kt', () => {
+  const rules = readJSON(join(ROOT, 'rules.json'));
+  const uaHeader = rules?.[0]?.action?.requestHeaders?.find((h) => h.header === 'User-Agent')?.value;
+  if (uaHeader !== DESKTOP_UA) {
+    return `rules.json UA "${uaHeader}" != DESKTOP_UA "${DESKTOP_UA}"`;
+  }
+  const ktPath = join(ROOT, 'app', 'android', 'app', 'src', 'main', 'java', 'com', 'waincognito', 'app', 'MainActivity.kt');
+  if (!existsSync(ktPath)) return 'MainActivity.kt is missing';
+  const ktSrc = readSrc(ktPath);
+  const m = ktSrc.match(/private\s+const\s+val\s+DESKTOP_UA\s*=\s*\n?\s*"([^"]+)"/);
+  if (!m) return 'could not parse DESKTOP_UA from MainActivity.kt';
+  if (m[1] !== DESKTOP_UA) {
+    return `MainActivity.kt UA "${m[1]}" != DESKTOP_UA "${DESKTOP_UA}"`;
+  }
+  return true;
+});
+
+// A-injection — dry-run core_injection.js against shared/bundle_manifest.js in a mock VM DOM.
+await checkAsync('A-injection', 'core_injection.js queues MAIN_CRITICAL, MAIN_REST, and DEFERRED without ReferenceError', async () => {
+  const appended = [];
+  const pendingTimers = [];
+  const sandbox = {
+    console: { log() {}, warn() {}, error() {} },
+    setTimeout(fn) { pendingTimers.push(fn); return pendingTimers.length; },
+    clearTimeout() {},
+    chrome: { runtime: { getURL: (s) => `chrome-extension://test/${s}` } },
+    navigator: { userAgent: 'Mozilla/5.0 (Linux; Android 14; Mobile)', platform: 'Linux armv8l' },
+    screen: { width: 412, height: 915 },
+    document: {
+      head: null,
+      documentElement: { appendChild() {}, removeChild() {} },
+      createElement: () => ({ src: '', async: true, onload: null, onerror: null, parentNode: null }),
+    },
+    Promise, Object, RegExp, String, Array,
+  };
+  sandbox.document.head = {
+    appendChild(node) {
+      node.parentNode = sandbox.document.head;
+      appended.push(node.src.replace('chrome-extension://test/', ''));
+      if (typeof node.onload === 'function') {
+        Promise.resolve().then(() => node.onload.call(node));
+      }
+    },
+    removeChild(node) {
+      if (node) node.parentNode = null;
+      return node;
+    },
+  };
+  sandbox.window = sandbox; sandbox.self = sandbox; sandbox.globalThis = sandbox;
+  const ctx = vm.createContext(sandbox);
+  vm.runInContext(readSrc(join(ROOT, 'shared', 'bundle_manifest.js')), ctx, { filename: 'shared/bundle_manifest.js' });
+  vm.runInContext(readSrc(join(ROOT, 'core_injection.js')), ctx, { filename: 'core_injection.js' });
+
+  for (let tick = 0; tick < 50; tick++) {
+    await new Promise((r) => setImmediate(r));
+    while (pendingTimers.length) {
+      const fn = pendingTimers.shift();
+      fn();
+    }
+  }
+
+  for (let i = 0; i < MAIN_CRITICAL.length; i++) {
+    if (appended[i] !== MAIN_CRITICAL[i]) {
+      return `expected MAIN_CRITICAL[${i}]=${MAIN_CRITICAL[i]}, got ${appended[i]}`;
+    }
+  }
+  const missingRest = MAIN_REST.filter((f) => !appended.includes(f));
+  if (missingRest.length) return `missing MAIN_REST scripts: ${missingRest.join(', ')}`;
+  const missingDeferred = DEFERRED.filter((f) => !appended.includes(f));
+  if (missingDeferred.length) return `missing DEFERRED scripts: ${missingDeferred.join(', ')}`;
+  return true;
 });
 
 // A18/A19/A20 — the packaged extension.

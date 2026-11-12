@@ -8,62 +8,13 @@
  * phone numbers and email addresses before a chat transcript leaves the device.
  */
 
-function normalizeJid(jid) {
-  if (!jid || typeof jid !== 'string') return '';
-  const trimmed = jid.trim();
-  const atIndex = trimmed.indexOf('@');
-  let prefix = atIndex !== -1 ? trimmed.substring(0, atIndex) : trimmed;
-  let suffix = atIndex !== -1 ? trimmed.substring(atIndex + 1).toLowerCase() : 'c.us';
-
-  if (suffix === 's.whatsapp.net') suffix = 'c.us';
-
-  const colonIndex = prefix.indexOf(':');
-  if (colonIndex !== -1) {
-    prefix = prefix.substring(0, colonIndex);
-  }
-
-  return prefix ? `${prefix}@${suffix}` : '';
-}
-
-const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
-const PHONE_RE = /(?:\+?\d{1,4}[\s.-]?)?\(?\d{1,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4}\b|\b\d{7,15}\b/g;
-
-function redactPii(text) {
-  if (text === null || text === undefined) return '';
-  let value = String(text);
-  value = value.replace(EMAIL_RE, '[REDACTED EMAIL]');
-  value = value.replace(PHONE_RE, (match) => {
-    const digits = match.replace(/\D/g, '');
-    if (digits.length < 7) return match;
-    return '[REDACTED PHONE]';
-  });
-  return value;
-}
-
-const sanitizeText = redactPii;
-const sanitizeMarkdown = redactPii;
-
-function normalizeNotesInput(notes, jid) {
-  if (notes === null || notes === undefined) return '';
-  if (typeof notes === 'string') return notes;
-  if (Array.isArray(notes)) {
-    return notes.map((item) => normalizeNotesInput(item, jid)).filter(Boolean).join('\n');
-  }
-  if (typeof notes === 'object') {
-    if (typeof notes.getNote === 'function' && jid) {
-      try { return String(notes.getNote(jid) || ''); } catch (e) { /* fall through */ }
-    }
-    if (jid && Object.prototype.hasOwnProperty.call(notes, jid)) {
-      return String(notes[jid] || '');
-    }
-    const normalized = normalizeJid(jid);
-    if (normalized && Object.prototype.hasOwnProperty.call(notes, normalized)) {
-      return String(notes[normalized] || '');
-    }
-    return Object.values(notes).map((value) => String(value || '')).join('\n');
-  }
-  return String(notes);
-}
+const {
+  normalizeJid,
+  redactPii,
+  sanitizeText,
+  sanitizeMarkdown,
+  exportSanitizedChat,
+} = require('../../shared/ephemeral_utils.js');
 
 function createEphemeralNotesStore(initial) {
   const notes = Object.create(null);
@@ -197,43 +148,6 @@ function clearAll(...args) {
   const count = Object.keys(target || {}).length;
   for (const key of Object.keys(target || {})) delete target[key];
   return count;
-}
-
-function exportSanitizedChat(input) {
-  const data = input && typeof input === 'object' ? input : {};
-  const contactJid = normalizeJid(data.contactJid || data.jid || data.contact_jid || '');
-  const contactName = redactPii(data.contactName || data.name || data.contact_name || contactJid || 'Unknown Contact');
-  const messages = Array.isArray(data.messages) ? data.messages : [];
-  const notesText = normalizeNotesInput(data.notes, contactJid);
-
-  const lines = [];
-  lines.push(`# Chat Export: ${contactName}`);
-  lines.push('');
-  lines.push(`Contact: ${contactName} (${contactJid})`);
-  lines.push('');
-
-  lines.push('## Private Notes');
-  lines.push('');
-  lines.push(notesText.trim() ? redactPii(notesText) : '_No private notes._');
-  lines.push('');
-
-  lines.push('## Messages');
-  lines.push('');
-  if (messages.length === 0) {
-    lines.push('_No messages._');
-  } else {
-    for (const message of messages) {
-      const msg = message && typeof message === 'object' ? message : {};
-      const sender = redactPii(msg.sender || msg.from || msg.author || 'Unknown');
-      const timestamp = msg.timestamp || msg.time || msg.date;
-      const timeSuffix = timestamp ? ` (${redactPii(String(timestamp))})` : '';
-      const text = redactPii(msg.text || msg.body || msg.message || msg.content || '');
-      lines.push(`- **${sender}**${timeSuffix}: ${text}`);
-    }
-  }
-  lines.push('');
-
-  return lines.join('\n');
 }
 
 const createEphemeralNotes = createEphemeralNotesStore;

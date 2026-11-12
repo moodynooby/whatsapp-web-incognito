@@ -12,12 +12,13 @@ function findChatEntryElementForJID(jid)
     for (var i = 0; i < chatsShown.length; i++)
     {
         var reactElement = FindReact(chatsShown[i]);
-        if (reactElement.props.data == undefined) continue;
+        if (!reactElement || !reactElement.props || reactElement.props.data == undefined) continue;
 
         var data = reactElement.props.data;
         if (data.data == undefined && data.chat == undefined) continue;
 
         var id = data.data ? data.data.id : data.chat.id;
+        if (!id) continue;
 
         var matches = false;
         if (typeof (jid) == "object" && id == jid)
@@ -28,7 +29,7 @@ function findChatEntryElementForJID(jid)
         {
             matches = true;
         }
-        else if (data.data.accountLid && data.data.accountLid.toString() == jid)
+        else if (data.data && data.data.accountLid && data.data.accountLid.toString() == jid)
         {
             matches = true;
         }
@@ -118,14 +119,19 @@ function nodeToXML(node)
 
 function getCurrentChat()
 {
-    if (window.WhatsAppAPI &&  WhatsAppAPI.ChatCollection && WhatsAppAPI.ChatCollection.getActive)
+    if (window.WhatsAppAPI && WhatsAppAPI.ChatCollection && WhatsAppAPI.ChatCollection.getActive)
         return WhatsAppAPI.ChatCollection.getActive();
 
     // fallback to old method. TODO: this is not currently working
     var elements = document.getElementsByClassName(UIClassNames.CHAT_PANEL_CLASS);
+    if (!elements || elements.length === 0) return null;
     var reactResult = FindReact(elements[0], traverseUp = 2);
-    var chat = reactResult.props.children.props.children.props.chat;
-    
+    var chat = reactResult && reactResult.props && reactResult.props.children &&
+        reactResult.props.children.props && reactResult.props.children.props.children &&
+        reactResult.props.children.props.children.props
+        ? reactResult.props.children.props.children.props.chat
+        : null;
+
     return chat;
 }
 
@@ -137,9 +143,12 @@ function getCurrentChatPanel()
 
 function getPrefixFromJID(jid)
 {
+    if (typeof WAIJidUtils !== "undefined" && typeof WAIJidUtils.prefixOfJid === "function")
+        return WAIJidUtils.prefixOfJid(jid);
     if (!jid) return "";
-    var atIndex = jid.indexOf("@");
-    var prefix = atIndex !== -1 ? jid.substring(0, atIndex) : jid;
+    var str = String(jid);
+    var atIndex = str.indexOf("@");
+    var prefix = atIndex !== -1 ? str.substring(0, atIndex) : str;
     var colonIndex = prefix.indexOf(":");
     return colonIndex !== -1 ? prefix.substring(0, colonIndex) : prefix;
 }
@@ -195,15 +204,21 @@ async function getChatByJID(jid)
 
 function getJidOfChat(chat)
 {
-    var jid = chat.accountLid ? chat.accountLid.toString() : chat.id.toString();
-    return normalizeJID(jid);
+    if (!chat) return "";
+    var jid = chat.accountLid ? chat.accountLid.toString() : (chat.id ? chat.id.toString() : "");
+    return jid ? normalizeJID(jid) : "";
 }
 
 function normalizeJID(jid)
 {
-    var atIndex = jid.indexOf("@");
-    var prefix = atIndex !== -1 ? jid.substring(0, atIndex) : jid;
-    var suffix = atIndex !== -1 ? jid.substring(atIndex + 1) : undefined;
+    if (typeof WAIJidUtils !== "undefined" && typeof WAIJidUtils.normalizeJid === "function")
+        return WAIJidUtils.normalizeJid(jid);
+    if (!jid || typeof jid !== "string") return "";
+    var trimmed = jid.trim();
+    if (!trimmed) return "";
+    var atIndex = trimmed.indexOf("@");
+    var prefix = atIndex !== -1 ? trimmed.substring(0, atIndex) : trimmed;
+    var suffix = atIndex !== -1 ? trimmed.substring(atIndex + 1).toLowerCase() : "c.us";
 
     if (suffix === "s.whatsapp.net") suffix = "c.us";
 
@@ -212,7 +227,7 @@ function normalizeJID(jid)
         prefix = prefix.substring(0, colonIndex);
     }
 
-    return prefix + "@" + suffix;
+    return prefix ? (prefix + "@" + suffix) : "";
 }
 
 const arrayBufferToBase64 = (buffer) =>
@@ -231,13 +246,24 @@ const arrayBufferToBase64 = (buffer) =>
 function showToast(message)
 {
     var appElement = document.getElementsByClassName("app-wrapper-web")[0];
+    if (!appElement) return;
     var toast = document.createElement("div");
     toast.setAttribute("class", "f1UZe");
     toast.style.transformOrigin = "left top";
-    toast.innerHTML = "<div class=\"hYvJ8\">" + message + "</div>";
+    var inner = document.createElement("div");
+    inner.className = "hYvJ8";
+    inner.textContent = String(message == null ? "" : message);
+    toast.appendChild(inner);
     appElement.insertBefore(toast, appElement.firstChild);
-    Velocity(toast, { scale: [1, 0], opacity: [1, 0] }, { defaultDuration: 300, easing: [.1, .82, .25, 1] });
-    setTimeout(function () { Velocity(toast, { scale: [0, 1], opacity: [0, 1] }, { defaultDuration: 300, easing: [.1, .82, .25, 1] }); }, 4000);
+    if (typeof Velocity === "function")
+    {
+        Velocity(toast, { scale: [1, 0], opacity: [1, 0] }, { defaultDuration: 300, easing: [.1, .82, .25, 1] });
+        setTimeout(function () { Velocity(toast, { scale: [0, 1], opacity: [0, 1] }, { defaultDuration: 300, easing: [.1, .82, .25, 1] }); }, 4000);
+    }
+    else
+    {
+        setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 4000);
+    }
 }
 
 function exportIdbDatabase(idbDatabase) 
@@ -338,35 +364,37 @@ function clearDatabase(idbDatabase)
 // Based on https://stackoverflow.com/a/39165137/1806873
 function FindReact(dom, traverseUp = 0) 
 {
+    if (!dom) return null;
     const key = Object.keys(dom).find(key=>{
         return key.startsWith("__reactFiber$") // react 17+
             || key.startsWith("__reactInternalInstance$"); // react <17
     });
-    const domFiber = dom[key];
+    const domFiber = key ? dom[key] : null;
     if (domFiber == null) return null;
 
     // react <16
     if (domFiber._currentElement) {
         let compFiber = domFiber._currentElement._owner;
-        for (let i = 0; i < traverseUp; i++) {
-            compFiber = compFiber._currentElement._owner;
+        for (let i = 0; i < traverseUp && compFiber; i++) {
+            compFiber = compFiber._currentElement ? compFiber._currentElement._owner : null;
         }
-        return compFiber._instance;
+        return compFiber ? compFiber._instance : null;
     }
 
     // react 16+
     const GetCompFiber = fiber=>{
         //return fiber._debugOwner; // this also works, but is __DEV__ only
-        let parentFiber = fiber.return;
-        while (typeof parentFiber.type == "string") {
+        let parentFiber = fiber ? fiber.return : null;
+        while (parentFiber && typeof parentFiber.type == "string") {
             parentFiber = parentFiber.return;
         }
         return parentFiber;
     };
     let compFiber = GetCompFiber(domFiber);
-    for (let i = 0; i < traverseUp; i++) {
+    for (let i = 0; i < traverseUp && compFiber; i++) {
         compFiber = GetCompFiber(compFiber);
     }
+    if (!compFiber) return null;
 
     var reactElement = null;
 
@@ -385,22 +413,7 @@ function FindReact(dom, traverseUp = 0)
         reactElement = compFiber.stateNode;
     }
 
-    if (reactElement == null)
-    {
-    }
-
     return reactElement;
-}
-
-function fixCSSPositionIfNeeded(drop)
-{
-    if (drop.style.transform.includes("translateX") && drop.style.transform.includes("translateY"))
-    {
-        var matrix = drop.style.transform.replace(/[^0-9\-.,\s]/g, '').split(' ');
-        drop.style.left = matrix[0] + "px";
-        drop.style.top = matrix[1] + "px";
-        drop.style.transform = "";
-    }
 }
 
 function getCSSRule(ruleName)

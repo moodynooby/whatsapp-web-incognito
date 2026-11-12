@@ -34,6 +34,9 @@
 //
 // Those five are what is implemented, plus the reconnect rule for a closed socket.
 
+const fs = require('node:fs');
+const path = require('node:path');
+
 const DEFAULT_POLL_MS = 20000;          // §9.4 asks for 15–30 s
 const DEFAULT_SOCKET_CLOSED_MS = 45000;
 const DEFAULT_REPOLL_MS = 3000;         // how fast to look again after an intervention
@@ -63,27 +66,7 @@ const STATUS = Object.freeze({
  * (core/node_handler.js) and already keeps the replay queue in `exceptionsList` — §9.6
  * asks the tray to surface the existing queue, not to build a second one.
  */
-const PROBE = `(function () {
-  try {
-    if (!window.__WAI_WD__) {
-      window.__WAI_WD__ = { blocked: 0, interceptionWorking: false, held: 0, since: Date.now() };
-      document.addEventListener('onReadConfirmationBlocked', function () { window.__WAI_WD__.blocked++; });
-      document.addEventListener('onInterceptionWorking', function () { window.__WAI_WD__.interceptionWorking = true; });
-    }
-    var wd = window.__WAI_WD__;
-    // A bare identifier on purpose: if core/ ever renames it the read must not throw.
-    try { wd.held = (typeof exceptionsList !== 'undefined' && exceptionsList && exceptionsList.length) || 0; } catch (e) {}
-    var st = (window.__WAI__ && window.__WAI__.state) ? window.__WAI__.state() : null;
-    var vendorAlive = (typeof window.pako === 'object' && window.pako !== null && typeof window.pako.inflate === 'function') && (typeof window.Pbf === 'function');
-    return {
-      ok: true, state: st, wd: wd, vendorAlive: vendorAlive,
-      hasWai: !!(window.__WAI__ && window.__WAI__.state),
-      url: location.href, readyState: document.readyState
-    };
-  } catch (e) {
-    return { ok: false, error: String((e && e.message) || e) };
-  }
-})()`;
+const PROBE = fs.readFileSync(path.join(__dirname, 'page-hooks', 'watchdog-probe.js'), 'utf8').trim();
 
 /**
  * @param {object} opts

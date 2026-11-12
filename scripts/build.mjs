@@ -23,7 +23,11 @@ import {
 } from 'node:fs';
 import { join, dirname, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { MAIN_CRITICAL, MAIN_REST, DEFERRED, UI, CSS, IMAGE_ASSETS } from './bundle-defs.mjs';
+
+const require = createRequire(import.meta.url);
+const WAISettingsSchema = require('../shared/settings_schema.js');
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = join(ROOT, 'dist');
@@ -34,36 +38,8 @@ const flag = (n) => argv.includes(`--${n}`);
 const opt = (n) => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1];
 
 // ---------------------------------------------------------------- prefs
-// The single source of truth for option defaults is background.js's getOptions
-// handler — the extension's own background page. Deriving them here rather than
-// hardcoding means the Electron app and the extension can never disagree about what
-// "default" means, and an upstream change to those defaults fails the build loudly
-// (assertion A-prefs) instead of silently changing behaviour in one target only.
-function deriveDefaults() {
-  const src = readSource(join(ROOT, 'background.js'));
-  const getOptions = src.slice(src.indexOf('getOptions'));
-  if (getOptions === src) throw new Error('background.js has no getOptions handler');
-
-  // The key list is the argument to chrome.storage.local.get([...]).
-  const listMatch = getOptions.match(/storage\.local\.get\(\s*\[([^\]]*)\]/);
-  if (!listMatch) throw new Error('could not find the storage.local.get([...]) key list in background.js');
-  const keys = listMatch[1].split(',').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
-
-  // Defaults are the `var <key> = <literal>;` lines inside the handler.
-  const defaults = {};
-  for (const k of keys) {
-    const m = getOptions.match(new RegExp(`var\\s+${k}\\s*=\\s*(true|false|-?\\d+|"[^"]*")\\s*;`));
-    if (!m) throw new Error(`background.js declares no literal default for "${k}"`);
-    if (m[1] === 'true') defaults[k] = true;
-    else if (m[1] === 'false') defaults[k] = false;
-    else if (m[1].startsWith('"')) defaults[k] = m[1].slice(1, -1);
-    else defaults[k] = Number(m[1]);
-  }
-  if (!keys.length) throw new Error('background.js yielded an empty option key list');
-  return defaults;
-}
-
-const DEFAULT_PREFS = deriveDefaults();
+// Single canonical defaults schema in shared/settings_schema.js.
+const DEFAULT_PREFS = WAISettingsSchema.defaults('shared');
 
 // ---------------------------------------------------------------- helpers
 
@@ -117,6 +93,17 @@ function collectFiles(manifest) {
   }
   Object.values(manifest.icons ?? {}).forEach((f) => refs.add(f));
   if (manifest.action?.default_icon) refs.add(manifest.action.default_icon);
+  if (manifest.action?.default_popup) {
+    const popupFile = manifest.action.default_popup;
+    refs.add(popupFile);
+    if (existsSync(join(ROOT, popupFile))) {
+      const html = readFileSync(join(ROOT, popupFile), 'utf8');
+      for (const m of html.matchAll(/<(?:script[^>]+src|link[^>]+href)=["']([^"']+)["']/gi)) {
+        const rel = m[1].replace(/^\.\//, '');
+        if (rel && !/^[a-z]+:/i.test(rel)) refs.add(rel);
+      }
+    }
+  }
 
   const bg = manifest.background ?? {};
   for (const f of [...(bg.scripts ?? []), bg.service_worker].filter(Boolean)) refs.add(f);
@@ -292,7 +279,12 @@ function buildChrome(manifest, files) {
 
   const m = structuredClone(manifest);
   const bg = m.background ?? {};
-  m.background = { service_worker: bg.service_worker ?? bg.scripts?.[0] ?? 'background.js' };
+  const sw = bg.service_worker ??
+    (Array.isArray(bg.scripts)
+      ? (bg.scripts.find((s) => /(^|\/)background\.js$/.test(s)) ?? bg.scripts[bg.scripts.length - 1])
+      : null) ??
+    'background.js';
+  m.background = { service_worker: sw };
   delete m.browser_specific_settings;
 
   const formatted = formatManifest(m, pkg.version);
@@ -362,7 +354,7 @@ function buildElectron(manifest, files) {
   const shimOut = shimSrc
     .replace('__WAI_ASSETS__', JSON.stringify(assets, null, 2))
     .replace('__WAI_PREFS__', JSON.stringify(DEFAULT_PREFS, null, 2))
-    .replace('__WAI_VERSION__', JSON.stringify(manifest.version))
+    .replace('__WAI_VERSION__', JSON.stringify(pkg.version))
     .replace('__WAI_ORDER__', JSON.stringify({
       critical: MAIN_CRITICAL, rest: MAIN_REST, ui: UI, deferred: DEFERRED, css: CSS,
     }, null, 2));

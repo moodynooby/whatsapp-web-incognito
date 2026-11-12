@@ -20,7 +20,8 @@
     "128": "images/icon_128_blue.png"
   },
   "action": {
-    "default_icon": "images/icon_128_reshaped.png"
+    "default_icon": "images/icon_128_reshaped.png",
+    "default_popup": "popup.html"
   },
   "browser_specific_settings": {
     "gecko": {
@@ -38,6 +39,8 @@
   },
   "background": {
     "scripts": [
+      "shared/jid_utils.js",
+      "shared/settings_schema.js",
       "background.js"
     ]
   },
@@ -50,6 +53,7 @@
         "https://web.whatsapp.com/*"
       ],
       "js": [
+        "shared/bundle_manifest.js",
         "core_injection.js"
       ],
       "run_at": "document_start"
@@ -59,21 +63,25 @@
         "https://web.whatsapp.com/*"
       ],
       "js": [
+        "shared/jid_utils.js",
+        "shared/ephemeral_utils.js",
+        "shared/settings_schema.js",
+        "shared/settings_renderer.js",
+        "shared/wai_page_bus.js",
         "core/ui_class_names.js",
         "core/ui.js",
-        "lib/drop.js",
         "lib/sweetalert.min.js",
         "core/status_download.js"
       ],
       "css": [
-        "styles.css",
-        "lib/css/drop-theme-basic.css"
+        "styles.css"
       ]
     }
   ],
   "web_accessible_resources": [
     {
       "resources": [
+        "shared/*",
         "lib/*",
         "core/*",
         "images/*"

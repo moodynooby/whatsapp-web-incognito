@@ -1,338 +1,97 @@
-# WAIncognito desktop — architecture
+# WAIncognito architecture
 
-Short by design. This file records only what is **not obvious from reading the code** and
-cost real time to discover. Everything else lives where it belongs: rationale in the code
-comments, local changes in `patches/manifest.json`, guarantees in the assertion suite.
-
-The previous 819-line `ELECTRON_APP_PLAN.md` was deleted rather than maintained. It had
-drifted — it still recommended `sandbox: true` and knew nothing about the four bugs below
-— and a long document that is partly wrong is worse than no document, because people trust
-it.
+Short by design. This file records what is **not obvious from reading the code** and defines the shared invariants across all five shipped targets. Implementation rationale lives in code comments, upstream divergences live in `patches/manifest.json`, and automated guarantees live in `scripts/verify-bundles.mjs` + `app/electron/*.test.js`.
 
 ---
 
 ## 1. Shape of the thing
 
-One source of truth at the repo root produces three outputs:
+One canonical codebase produces five targets from shared definitions under `shared/` and `manifest.json`:
 
-| Output | Path | Built by |
+| Target | Output | Built by |
 |---|---|---|
-| Electron app | `app/.build/` → `release/` | `scripts/build.mjs --target=electron` |
-| Chrome extension | `dist/extension/chrome` | `--target=chrome` |
-| Firefox extension | `dist/extension/firefox` | `--target=firefox` |
+| Chrome MV3 extension | `dist/extension/chrome` | `scripts/build.mjs --target=chrome` |
+| Firefox MV3 extension | `dist/extension/firefox` | `scripts/build.mjs --target=firefox` |
+| Android GeckoView extension | `app/android/app/src/main/assets/waincognito` | `scripts/build.mjs --target=geckoview` |
+| Safari / iOS extension | `./extension-source` → Xcode project | `.github/workflows/convert-to-safari.yml` (`build:firefox`) |
+| Electron desktop app | `app/.build/` → `release/` | `scripts/build.mjs --target=electron` |
 
-The extension file list is **derived from `manifest.json`**, not hardcoded, so an upstream
-release that adds or removes a file propagates to every target automatically. Root is the
-Firefox manifest (it uses `background.scripts`); Chrome needs
-`background.service_worker` and must drop `browser_specific_settings`.
+Shared UMD modules under `shared/` are the single source of truth across Electron (Node main/preload + Chromium page bundles), extensions (service worker / background + popup + content scripts), Android GeckoView, and build/verification scripts:
 
-`core/` and `lib/` use exactly **two** extension APIs — `chrome.runtime.getURL` (4 sites,
-all images) and `browser.runtime.sendMessage` (15 sites, only `getOptions`/`setOptions`).
-Everything else they touch is native in a webview. That is the entire reason the port is
-feasible: the app supplies a transport, not a reimplementation.
+- `shared/settings_schema.js` (`WAISettingsSchema`): canonical groups (`privacy`, `messages`, `timing`, `app`), defaults, integer ranges/choices, SHA-256 secret-hash PIN spec, `scope` (`'shared'` vs `'shell'`), `coerceSetting`, `validatePatch`.
+- `shared/settings_renderer.js` (`WAISettingsRenderer`): schema-driven DOM renderer shared verbatim by `popup.html` + `popup.js` and the in-page modal `#wai-settings-modal` in `core/ui.js`.
+- `shared/bundle_manifest.js` (`WAIBundleManifest`): single canonical script ordering (`MAIN_CRITICAL`, `MAIN_REST`, `DEFERRED`, `UI`, `CSS`, `IMAGE_ASSETS`) and `DESKTOP_UA`. Consumed at runtime by `core_injection.js` and at build/test time by `scripts/bundle-defs.mjs` / `scripts/build.mjs` / `scripts/verify-bundles.mjs`.
+- `shared/jid_utils.js` (`WAIJidUtils`): shared JID normalization (`@s.whatsapp.net` → `@c.us`, device suffix stripping, `@lid` / `@g.us` preservation).
+- `shared/ephemeral_utils.js` (`WAIEphemeralUtils`): PII-redacted Markdown chat exporter shared by `app/electron/ephemeral_notes.js` and extension/Android Blob export in `core/ui.js`.
+- `shared/wai_page_bus.js` (`WAIPageBus`): typed cross-world JSON `CustomEvent` bridge (`wai:bridge:to-page` / `wai:bridge:to-host`) and one merged `DOMObserver` (`MutationObserver` on `document.body` shared by `core/ui.js` and `core/status_download.js`).
 
-Option defaults are **parsed out of `background.js`** at build time rather than restated,
-so the app and the extension cannot disagree about what a default is.
+Root `manifest.json` stays Firefox/Gecko-compatible (`background.scripts`); `scripts/build.mjs` derives Chrome MV3 (`background.service_worker`, stripping `browser_specific_settings`), collects `action.default_popup` (`popup.html`) and its referenced scripts (`popup.js`, `shared/settings_renderer.js`, etc.), and stamps `version` from `package.json`.
 
 ---
 
 ## 2. Load-bearing constraints
 
-### C1 — Inject from the preload, at `document_start`
+### C1 — Inject `MAIN_CRITICAL` (`ws_hook.js` + `comms_worker_fix.js`) before socket/worker startup
 
-`webContents.executeJavaScript` awaits `did-stop-loading` (Electron's
-`waitTillCanExecuteJavaScript`). `core/ws_hook.js` must replace the `WebSocket`
-constructor before WhatsApp opens its first socket, so post-load injection is far too
-late.
-
-`webFrame.executeJavaScript` from the preload has no such gate and targets the **main
-world**. That pair is the only correct one. Do not use
-`executeJavaScriptInIsolatedWorld` — that is the isolated world.
-
-In the sequence, `nativeWs` and `critical` come **first**. Everything else can be late;
-only `ws_hook.js` has a deadline, and every step hoisted above it is latency added to it.
+- In Electron, `app/electron/preload.js` injects `page-hooks/native-ws.js` and `app/.build/critical.js` via `webFrame.executeJavaScript` at `document_start` directly into the main world. `webContents.executeJavaScript` awaits `did-stop-loading`, which is too late.
+- In extensions / GeckoView, `core_injection.js` reads `WAIBundleManifest` and sequentially awaits `MAIN_CRITICAL` (`core/ws_hook.js` followed by `core/comms_worker_fix.js`) before queueing `MAIN_REST` with `async = false`. Asserted by `A-critical` and `A-injection`.
 
 ### C2 — `contextIsolation: true`, and `sandbox: false` deliberately
 
-`contextIsolation` is the real boundary and is non-negotiable. `nodeIntegration: false`.
+`contextIsolation` is mandatory (`nodeIntegration: false`). `sandbox: false` allows the preload to read `app/.build/*` without a synchronous `ipcRenderer.sendSync` round-trip blocking `document_start` WebSocket hooking.
 
-`sandbox` is **off** on purpose, reversing an earlier recommendation. A sandboxed preload
-cannot `require('fs')`, and the preload must read `app/.build/*`. The only sandboxed route
-to those bytes is a synchronous `ipcRenderer.sendSync` to main — which puts the main
-process on the critical path of the one file with a hard deadline. Trading a real C1 risk
-for defence-in-depth on our own preload is a bad trade.
+On Linux, Chromium aborts before JS runs if the unprivileged SUID `chrome-sandbox` helper is misconfigured unless `--no-sandbox` is passed at process spawn (`pnpm start`), fixed in packaged `.deb` installs via `app/packaging/linux/postinst` (`4755`), or gated via `app/electron/sandbox.js`.
 
-This also settles the Chromium-level sandbox, with a correction to what an earlier
-revision of this document claimed. A port from another Electron app brought
-`ELECTRON_DISABLE_SANDBOX=1` along with it, and this app used to do the equivalent
-itself: `app/electron/main.js` appended `--no-sandbox` on Linux, **unconditionally**,
-with a comment saying there was nothing to set and nothing to remember. That comment
-was wrong, and it shipped a real bug: the SUID-helper abort happens during early
-Chromium startup, *before* the app's JavaScript runs, so the in-code switch cannot
-save a launch — proven by a system `.deb` install whose log held the FATAL and not a
-single `[wai]` line, i.e. "clicking the icon does nothing". What actually fixes it:
+### C3 — `MAIN_REST` and `UI` remain separate bundles
 
-- the `.deb` `postinst` (app/packaging/linux/postinst, root on install and upgrade)
-  sets `chrome-sandbox` to root-owned `4755`, so installed builds keep the sandbox;
-- dev runs, which can never have those permissions, pass `--no-sandbox` on the command
-  line (`pnpm start` does), because only a flag present at process launch counts;
-- `main.js` appends the switch only when the helper next to the binary is misconfigured
-  (see `app/electron/sandbox.js`, unit-tested) — best-effort for child processes, and
-  deliberately not unconditional, so a fixed install is not needlessly unsandboxed.
+`MAIN_REST` (`core/interception.js` `initialize`) and `UI` (`core/ui.js` `initializeUI`) are emitted as separate bundles and checked by `A11` / `A2` against column-0 lexical or name collisions. Cross-world communication between `MAIN_REST` (page world in extensions) and `UI` (isolated world in extensions) flows through `WAIPageBus` (`shared/wai_page_bus.js`). Both `core/ui.js` and `core/status_download.js` share `WAIPageBus.DOMObserver` rather than allocating duplicate body-level `MutationObserver` instances.
 
-Chromium requires `chrome-sandbox` to be root-owned with mode `4755`,
-an `npm`/`pnpm` install never produces that, and where the unprivileged-namespace fallback is
-*also* unavailable — a container, a restricted VM, a seccomp/AppArmor profile blocking
-`unshare(CLONE_NEWUSER)` — Chromium aborts with
+### C4 — CSP forbids shell-owned schemes; bootstrap state is synchronous
 
-```
-[FATAL:sandbox/linux/suid/client/setuid_sandbox_host.cc] The SUID sandbox helper binary
-was found, but is not configured correctly. Rather than run without sandboxing I'm aborting now.
-```
-
-before a window exists. There is no settings screen to reach and no diagnostic to read.
-
-**What that costs:** the zygote boundary is off process-wide on Linux, so utility processes
-are not contained. The two narrower boundaries are untouched — the per-renderer
-`sandbox: false`, which covers the one renderer that loads our bundles, and the navigation
-lock, which confines the app to `web.whatsapp.com`. Windows and macOS are unaffected: the
-switch is Linux-only. `scripts/doctor.cjs` passes `--no-sandbox` on its own command line,
-which is a deliberate, local choice for a standalone diagnostic run and not app state.
-
-### C3 — main and ui stay separate scripts
-
-`interception.js` and `ui.js` both declared and called a top-level `initialize`.
-Concatenating the bundles makes the last declaration win for the whole script, so
-`interception.js` silently called `ui.js`'s version, the hook never armed, and **nothing
-errored**. Patch P1 removed the cause (renamed to `initializeUI`, 2 lines); keeping the
-bundles separate is now defence in depth. Assertion `A11` guards it.
-
-### C4 — CSP forbids shell-owned schemes
-
-CSS is one inline `<style>`; images are `data:` URIs; code goes through
-`webFrame.executeJavaScript`; prefs are a JS literal so `getOptions` stays synchronous
-(`ui.js:23` reads the result immediately and an IPC round-trip would race it).
+In Electron, WhatsApp CSP forbids `file:` / shell URLs for assets and stylesheets. `styles.js` injects CSS inline, `assets.json` inlines `data:` URIs (`A6`), and `preload.js` injects `window.__WAI_BOOTSTRAP__` (containing `prefs`, `whitelist`, and `notes`) before `shim.js` so `getInitialState` and `getOptions` answer synchronously with zero startup flicker or race.
 
 ### C5 — `partition: 'persist:wai'`
 
-Without it the user is logged out on every restart. Declared once as `PARTITION` because
-two places need it — `session.fromPartition(PARTITION)` to configure the session and
-`webPreferences.partition` to attach the window. Out of sync means configuring a session
-the window does not use, which fails silently.
+Declared once (`PARTITION`) for both `session.fromPartition(PARTITION)` and `webPreferences.partition`.
 
-### C6 — the engine must be recent
+### C6 — Engine floor check
 
-WhatsApp Web gates on the user agent **and** on the engine. Electron 33 embeds Chromium
-130 (Oct 2024); by 2026 that is refused outright, with a "please update your browser" page
-and nothing in our logs. `assessEngine()` checks `process.versions.chrome` at boot and
-fails loudly below major 140. The fix is always to upgrade Electron, never to raise the
-number or lie in the UA.
+`assessEngine()` verifies `process.versions.chrome` meets WhatsApp Web's minimum supported Chromium major version before proceeding. `DESKTOP_UA` stays synchronized across `shared/bundle_manifest.js`, `rules.json`, and `MainActivity.kt` (`A-ua`).
 
 ---
 
-## 3. Traps that cost real time
+## 3. Single-world UMD & Electron page hooks
 
-These are the four that produced a "silent" failure — the app looked installed and did
-nothing, or looked broken for reasons the logs did not explain.
+Extensions isolate content scripts from WhatsApp's webpack globals; Electron runs everything in the page's single world where webpack defines global AMD `define`. Every UMD file (`lib/pako.js`, `lib/pbf.3.0.5.min.js`, `lib/sweetalert.min.js`, and all `shared/*.js` modules) must place its UMD/CJS header within the first 600 chars so `scripts/build.mjs` wraps it in a `var define=void 0, exports=void 0, module=void 0;` global-branch guard (`A-umd`, `A-umd2`), never call bare `require()` inside browser factories, and declare zero column-0 `var`/`let`/`const`/`function`/`class` bindings (`A2`, `A11`).
 
-### 3.1 One world, not two
-
-The extension runs its code in **two** JS worlds: a page world (`document_start`) and an
-isolated content-script world (`document_idle`). Electron gives **one**.
-
-`lib/drop.js`, `lib/pako.js`, `lib/pbf` and `lib/sweetalert.min.js` each open with a UMD
-wrapper that prefers `define.amd`. In the extension they run in the isolated world, where
-WhatsApp's globals do not exist, so the browser-global branch is taken. In the app they
-see WhatsApp's global AMD `define` and publish **nothing**.
-
-`core/` calls `pako.inflate(...)` as a bare global in three places. With `pako` undefined,
-every compressed frame throws inside `wsHook.before`, the catch passes the frame through
-**UNBLOCKED**, and the watchdog still reports `PROTECTED` because the hook did arm. Silent
-receipt leak. Nothing throws at load time — the global is simply absent until the first
-message.
-
-Fixed by wrapping each UMD file so the globals are shadowed by function-scoped vars
-(mutation of `window.define` would be undone by any non-writable or accessor property),
-inside a non-strict IIFE so top-level `this` is still the global object. Asserted by
-`A-umd`, which evaluates the real emitted chunk against a global AMD `define`.
-
-### 3.2 A UMD bundle that registers nothing still looks healthy
-
-The watchdog reports `PROTECTED` on hook presence. It cannot know whether a *library* it
-depends on loaded. Hence `A-umd`: it checks the globals `core/` actually calls
-(`pako`, `Pbf`, `Tether`, `Drop`, `swal`) against the built artifact, under exactly the
-condition that broke it.
-
-### 3.3 Ordering: a log can be right and the page still wrong
-
-The user agent was rewritten correctly and our log printed a clean
-`Chrome/152.0.7977.130 Safari/537.36` — while the page received
-`...WAIncognito/2.5.6 Chrome/152... Electron/44.4.5...` and WhatsApp served its gate page.
-
-The `BrowserWindow` was constructed **before** the session UA was applied, so the renderer
-had already captured the stock UA. Setting it afterwards changed nothing that mattered.
-
-Worse, a standalone probe **missed this entirely**, because it happened to set the UA
-before creating its window. A probe that does not run the production path cannot catch an
-ordering bug in the production path.
-
-Hence `WAI_SELFTEST=1` (`pnpm one` step 6): the real app reports the UA its own window
-received, the title, script count, hook state and the vendor globals. Exit 0 healthy,
-1 gated, 2 blank.
-
-### 3.4 Close-to-hide plus a single-instance lock looks like a crash
-
-The shell hides on window-close so the WhatsApp session survives, and a second launch only
-focuses the existing window. So closing the window leaves an **invisible** process running
-the old Electron and old bundles; relaunching prints
-`another instance is already running; this one is exiting` and looks like a crash — and
-after an upgrade, looks like "the fix did nothing".
-
-`pnpm kill` ends that ambiguity. Quit from the tray, not the X.
+Electron preload hooks live as modular browser scripts under `app/electron/page-hooks/`:
+- `native-ws.js`: captures native `WebSocket` before `ws_hook.js`.
+- `diagnostics.js`: captures CSP violations and main-world runtime errors.
+- `notifications.js`: forwards renderer `Notification` calls cleanly.
+- `watchdog-probe.js`: listens on `onReadConfirmationBlocked` and `onInterceptionWorking` and reports hook health to `app/electron/watchdog.js`.
 
 ---
 
-## 4. Settings
+## 4. Settings & feature wiring across surfaces
 
-### 4.1 One list, two surfaces
+Every setting's key, type, range, group, and default comes from `shared/settings_schema.js`:
 
-`app/electron/settings-menu.js` holds every setting as a descriptor: a key, a label, a group
-and — for the one integer — the values worth offering. It holds **no defaults**, because
-defaults are parsed out of `background.js` at build time (§1) and a `default:` field here
-would be a second source of truth nothing keeps in sync.
+1. **Extension toolbar popup (`popup.html` + `popup.js`)**: MV3 CSP-clean (`A-panelkeys`), displays live WhatsApp tab status + open/switch action, and mounts `WAISettingsRenderer` (`scope: 'shared'`).
+2. **In-page modal (`#wai-settings-modal`)**: Mounted by `core/ui.js` using the same `WAISettingsRenderer` on navbar icon click, `Alt+Shift+I`, `#wai-fallback-trigger` (when WhatsApp renames navbar classes), or Electron fallback (`__WAI__.openOptions({ focus })`, e.g. for setting the 4-digit SHA-256 Privacy Screen Lock PIN). Drop/Tether (`lib/drop.js`) has been retired.
+3. **Electron native tray/settings menu (`app/electron/settings-menu.js`)**: Dynamically built from `WAISettingsSchema.specsFor('all')` + `GROUPS`, rendering `safetyDelay` (`0..30`) and `privacyScreenLockIdleMinutes` (`1..60`) radio submenus and `"Set / Change Privacy PIN…"` / `"Clear Privacy PIN"` actions for `privacyScreenLockPIN`.
 
-The desktop app renders that table as a native `Menu` — from the tray, from `Ctrl`/`Cmd` + `,`
-(`before-input-event`, because Windows and Linux deliberately have no menu bar), and from the
-macOS Settings menu. `safetyDelay` is a radio submenu rather than a number field: the page only
-ever accepted whole seconds 1–30, and radio choices cannot be mis-entered. Its validation
-bound is derived from the same `choices` array, so the values offered and the values accepted
-cannot drift.
-
-The extension still uses the panel injected into WhatsApp's own menu bar, because a browser
-extension has no native menu to offer. That panel has no tests, so `A-panelkeys` guards the one
-thing that breaks silently there: a key `background.js` does not know is ignored, and the
-checkbox appears to work while nothing is saved.
-
-### 4.2 A pref must take effect, not just persist
-
-The globals that decide whether a receipt is blocked — `readConfirmationsHookEnabled`,
-`saveDeletedMsgsHookEnabled`, `showDeviceTypesEnabled`, `autoReceiptOnReplay`,
-`allowStatusDownload` — are read by `core/node_handler.js` on every decoded stanza, and the
-only thing that ever mutates them is `core/injected_ui.js`'s `onOptionsUpdate` listener.
-
-So `shim.js`'s `applyPrefs` **dispatches that event** when a change arrives from the host. It
-did not: a tray toggle updated the shim's own `PREFS` and stopped, which left the checkbox
-saved, the tray agreeing with itself, and the page enforcing the old value until the next
-document load. The `fromPage` flag suppresses the dispatch for the page's own round-trip, since
-`core/ui.js`'s tick handlers already dispatch right after calling `setOptions`.
-
-`A-liveprefs` evaluates the real emitted shim and watches the event, because a grep for the
-event name cannot tell a dispatch that happens from one that is merely mentioned.
-
-### 4.3 The fallback, and why there is one
-
-The native menu is better in every way that matters — it cannot break when WhatsApp renames a
-class, and it needs no injected HTML. But "you cannot change your settings" is worse than the
-old panel, so if building or showing the menu throws, `openSettings` asks the page to open the
-panel it injects (`__WAI__.openOptions` → `onOpenIncognitoOptions` → `Drop.open()`), and if
-that is unavailable too, it says so in a dialog instead of failing silently.
-
-The panel reports honestly rather than optimistically: it is anchored to an element inside
-WhatsApp's menu bar, so when the anchor is missing the answer is `false` — unavailable, not
-closed.
+Preference changes from the Electron menu/tray push via `preload` → `shim.js` (`onOptionsUpdate`) → `core/interception.js` (enforcing globals), `core/status_download.js` (`allowStatusDownload`), `core/injected_ui.js` (blocked-receipt banners & unread counter colors), and `core/ui.js` (Privacy Screen Lock + open modal sync). Tested live by `A-liveprefs`. Extension background/tab sync uses `getInitialState` and `wai:optionsUpdated`; scheduled messages only advance to `sent` after an explicit live-tab ack. Chat headers remain free of extra pills, Private Note, and Export buttons.
 
 ---
 
-## 5. Background operation
+## 5. Commands & Verification
 
-**Hot, never suspend:** the WebSocket, `wsHook`, and the per-frame
-decrypt → decode → intercept → re-encrypt path. That path *is* read-receipt blocking. A
-slow app is an annoyance; a silently leaking one is worse than no app.
-
-**Can idle when hidden:** the DOM observer (the dominant cost), painting, analytics.
-`backgroundThrottling: false` is mandatory — WhatsApp's keepalive is timer-driven, so
-throttling churns the socket and opens leak windows. Efficiency therefore cannot come from
-the hidden state; it comes from the observer and from request filtering.
-
-`watchdog.js` polls from the **main process**, never a page `setInterval` — a throttled page
-timer is exactly what is being defended against. It reports `PROTECTED` /
-`RECONNECTING` / `NOT_PROTECTED`, because a dead hook is otherwise indistinguishable from
-a working one.
-
-The lost-injection signal is generation **decrease**, zero, or "no injection after a
-navigation" — *not* "unchanged". `generation` is bumped once per `arm()`, once per
-document, so it is constant while healthy; testing "unchanged" would report
-`NOT_PROTECTED` forever and reload-loop the app.
-
----
-
-## 6. Commands
-
-| | |
+| Command | Purpose |
 |---|---|
-| `pnpm one` | kill stale → env → build → 27 assertions → 177 tests → **real app** → verdict |
-| `pnpm check` | same without the real-window check — this is what CI runs |
-| `pnpm kill` | stop stale instances (`--dry` lists only, `--all` also stops watchers) |
-| `pnpm doctor` | bare-window probe: is WhatsApp reachable, and which engine is installed |
-| `pnpm dev` | the whole loop: build → verify → watch → launch the app pointed at the dev server |
-| `pnpm start` | bring the app back after quitting it; the watcher keeps running |
-| `pnpm build:ext` | stage the Chrome and Firefox extensions |
-
-Everything else is either a single-target shortcut (`build:chrome`, `build:firefox`,
-`build:electron`, `package:chrome`, `package:firefox`) or a raw flag away: `dev.mjs --once`
-for a single build-and-verify pass with no watcher, and `build.mjs --clean`. Those two are
-deliberately not npm scripts — an entry nobody references is an entry nobody finds, and both
-files document the flag in their own header.
-
-Local desktop packaging is `pnpm exec electron-builder`, which is what the release workflow
-runs. It was never an npm script, because a second packaging path that nothing exercises is
-one that quietly rots.
-
-Dev reload has two genuinely different scopes, and the distinction is tested: edits under
-`core/` or `lib/` re-inject the live page (~170 ms, window/socket/login survive); edits to
-`app/electron/*.js` relaunch, because a preload cannot be swapped into a live renderer and
-pretending otherwise leaves a torn context.
-
-`pnpm dev` used to be two terminals — the watcher in one, `pnpm start` in the other. The
-split itself is deliberate and still holds: the dev server knows nothing about the app, the
-app polls it, so files can be edited with or without a window open. What changed is that
-`dev` now spawns the app itself, so the common case is one command. `--no-launch` is a flag,
-not a script, for the watch-only case.
-
----
-
-## 7. Known limitations
-
-- **Tray requires a GNOME AppIndicator extension.** GNOME 42+ removed the legacy status
-  area, so a correct `Tray` has nowhere to render without it. Measured on this machine:
-  `Tray.setMenu` no longer exists in Electron 44 (use `setContextMenu`), and
-  `nativeImage.createFromPath` returns an **empty** image for every SVG in `images/` while
-  all four PNGs load. Without a tray, closing the window quits rather than hides, since
-  there would be no way to restore it. The settings menu survives this: `Ctrl`/`Cmd` + `,`
-  does not go through the tray, and it falls back to the in-page panel (§4.3).
-- **On Linux the zygote sandbox is off** (`--no-sandbox`, passed by `main.js`; see §2 for why
-  and what it costs). There is no runtime toggle and no alternative path: the only other fix
-  was a `sudo chown`/`chmod` inside `node_modules`, so it was dropped rather than offered.
-  Linux is also where this app is developed, which is how the failure was found at all.
-- **The extension's settings panel is untested and breakable.** It is HTML injected into
-  WhatsApp's DOM, so a WhatsApp release that renames the menu item's class makes it vanish —
-  which is the "temporarily broken" dialog in `core/ui.js`. The desktop app no longer depends
-  on it; the extension still does, and `A-panelkeys` only guards the option keys, not the
-  anchor. A `chrome.options_page` would remove the dependency and is the obvious next step.
-- **The UA rewrite is a browser-gate bypass, not anonymity.** It changes one signal.
-  Electron remains distinguishable by renderer strings, feature quirks and network
-  fingerprint. Overridable with `WAI_USER_AGENT`.
-- **CI is not yet publish-safe.** `.github/workflows/create-release.yml` and
-  `convert-to-safari.yml` both do `mv !(.github)`, so `app/`, `scripts/` and `patches/`
-  leak into the published extension zip and the Safari project. Needs an explicit
-  allowlist from `app/.build/ext-files.json` before any release.
-- **Patch P2 (MutationObserver scoping) is planned, not applied.** It is the only patch
-  that changes *when* UI work happens, so it must pass the full feature parity matrix
-  before shipping.
-- **No automated interception test yet.** The self test proves the hook arms and the page
-  loads; it does not prove a `read` stanza is actually blocked. That needs a live
-  two-account run.
-- **Install size is ~150–200 MB.** "Light" here means one window, one process tree and no
-  browser chrome — not bytes. Settings follow the same rule: a native `Menu`, not a second
-  window and not a bundled settings page, so the feature costs no new dependency and no new
-  window.
+| `pnpm run build` | Build Firefox, Chrome, Electron, and Android GeckoView outputs |
+| `pnpm run check` | Build + package extension zips + run all assertions (`verify-bundles.mjs`) + unit tests |
+| `pnpm run verify` | Run `scripts/verify-bundles.mjs` only |
+| `pnpm test` | Run `app/electron/*.test.js` via `node --test` |
+| `pnpm run doctor:android` | Verify Android GeckoView staged assets and Kotlin wiring |
+| `pnpm dev` | Watch (`core`, `lib`, `shared`, `images`, `popup*`, `app/electron/page-hooks`, etc.), rebuild, verify, hot-inject `'bundles'` or relaunch `'app'` |
+| `pnpm run kill` | Stop stale Electron / watcher instances (`--dry`, `--all`) |
